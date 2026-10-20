@@ -55,3 +55,9 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# WoodsyCart: uploaded and downloaded media (product images, bills, receipts) — back these up separately
+src/WoodsyCart.Api/wwwroot/media/
+
+# Data Protection keys used to encrypt payment secrets — keep out of git, back up separately
+src/WoodsyCart.Api/App_Data/

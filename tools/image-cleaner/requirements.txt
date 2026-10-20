@@ -1,0 +1,7 @@
+rapidocr-onnxruntime==1.2.3
+onnxruntime>=1.24
+opencv-python-headless>=4.10
+numpy
+pillow
+fastapi
+uvicorn[standard]
