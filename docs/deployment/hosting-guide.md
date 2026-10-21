@@ -1,5 +1,7 @@
 # WoodsyCart — hosting guide
 
+> **Hosting on Plesk / Windows (IIS)?** Use [plesk-windows-guide.md](plesk-windows-guide.md) instead. This guide is for a Linux server with nginx.
+
 How to move WoodsyCart from your PC (localhost) to a real server: the API, the image cleaner, the database and both Angular apps.
 
 - [1. What runs where](#1-what-runs-where)
@@ -28,9 +30,9 @@ How to move WoodsyCart from your PC (localhost) to a real server: the API, the i
         ▼
  ┌──────────────────────────── one server ────────────────────────────┐
  │ nginx (ports 80/443)                                               │
- │   woodsycart.in        → storefront files (/var/www/woodsy-web)    │
- │   admin.woodsycart.in  → admin files      (/var/www/woodsy-admin)  │
- │   api.woodsycart.in    → API on 127.0.0.1:5100                     │
+ │   woodsycart.com        → storefront files (/var/www/woodsy-web)    │
+ │   admin.woodsycart.com  → admin files      (/var/www/woodsy-admin)  │
+ │   api.woodsycart.com    → API on 127.0.0.1:5100                     │
  │                                                                    │
  │ WoodsyCart API (.NET 9)          ── starts & watches ──┐           │
  │   reads/writes /var/woodsycart/media                   ▼           │
@@ -81,15 +83,22 @@ Everything runs on the CPU, offline, with no paid service. If the cleaner is not
 
 ## 3. Domains and DNS
 
-The production builds already expect these addresses (`src/environments/environment.ts` in both Angular apps):
+The apps use these addresses. They are not built in: you set them in `config.json` after copying the apps (section 8):
 
 | Address | What |
 |---|---|
-| `https://woodsycart.in` (and `www`) | Storefront |
-| `https://admin.woodsycart.in` | Admin app |
-| `https://api.woodsycart.in` | API and photos (`/media/...`) |
+| `https://woodsycart.com` | Storefront (main address) |
+| `https://admin.woodsycart.com` | Admin app |
+| `https://api.woodsycart.com` | API and photos (`/media/...`) |
+| `https://www.woodsycart.com` | Redirects to `https://woodsycart.com` |
+| `woodsycart.in`, `www.woodsycart.in`, `admin.woodsycart.in`, `api.woodsycart.in` | Redirect to the same page on `.com` (section 9) |
 
-At your domain registrar, add **A records** for `woodsycart.in`, `www`, `admin` and `api`, all pointing to the server's IP. If you use other names, change `apiUrl` / `storefrontUrl` in both `environment.ts` files before building.
+At **both** domain registrars (or DNS providers), add **A records** pointing to the server's IP:
+
+- `woodsycart.com`: `@`, `www`, `admin`, `api`
+- `woodsycart.in`: `@`, `www`, `admin`, `api` (only so the redirects work)
+
+If you use other names, put them in the two `config.json` files and the API settings (section 6.2). No rebuild is needed. Every address to configure, inside and outside the app, is listed in [urls-and-domains.md](urls-and-domains.md).
 
 ---
 
@@ -197,18 +206,20 @@ ConnectionStrings__Default=Server=localhost;Database=WoodsyCartDb;User Id=woodsy
 # At least 32 random characters. Generate one with: openssl rand -base64 48
 Jwt__Key=<long random secret>
 
-Cors__Origins__0=https://woodsycart.in
-Cors__Origins__1=https://www.woodsycart.in
-Cors__Origins__2=https://admin.woodsycart.in
+Cors__Origins__0=https://woodsycart.com
+Cors__Origins__1=https://www.woodsycart.com
+Cors__Origins__2=https://admin.woodsycart.com
 
 Smtp__Host=<smtp host>
 Smtp__User=<smtp user>
 Smtp__Password=<smtp password>
 Smtp__AdminNotifyEmail=<your email>
-Smtp__StorefrontUrl=https://woodsycart.in
+Smtp__StorefrontUrl=https://woodsycart.com
+Smtp__AdminUrl=https://admin.woodsycart.com
+Smtp__ApiUrl=https://api.woodsycart.com
 
 # Only used the very first time, on an empty database, to create the admin login
-Seed__AdminEmail=admin@woodsycart.in
+Seed__AdminEmail=admin@woodsycart.com
 Seed__AdminPassword=<strong password>
 
 # Image cleaner (see section 7)
@@ -337,6 +348,36 @@ The output is in `dist/woodsy-cart-web/browser` and `dist/woodsy-cart-admin/brow
 - `/var/www/woodsy-web/` (storefront)
 - `/var/www/woodsy-admin/` (admin)
 
+### 8.1 Point the apps at the live API (`config.json`)
+
+The same build runs anywhere: each app reads its addresses from `config.json` next to its `index.html` when it starts. The copy in the build holds the localhost addresses, so after **every** upload, write the live ones:
+
+`/var/www/woodsy-web/config.json`
+
+```json
+{
+  "apiUrl": "https://api.woodsycart.com"
+}
+```
+
+`/var/www/woodsy-admin/config.json`
+
+```json
+{
+  "apiUrl": "https://api.woodsycart.com",
+  "storefrontUrl": "https://woodsycart.com"
+}
+```
+
+Tip: keep these two files in `/etc/woodsycart/` and copy them in after each upload, so an update never puts localhost back:
+
+```bash
+sudo cp /etc/woodsycart/web-config.json   /var/www/woodsy-web/config.json
+sudo cp /etc/woodsycart/admin-config.json /var/www/woodsy-admin/config.json
+```
+
+A change to `config.json` takes effect the next time a visitor opens the site. nginx serves it with `no-cache` (section 9).
+
 Both apps are PWAs with service workers, which **only work over HTTPS**. Section 9 sets that up.
 
 ---
@@ -346,33 +387,51 @@ Both apps are PWAs with service workers, which **only work over HTTPS**. Section
 `/etc/nginx/sites-available/woodsycart`:
 
 ```nginx
+# Link-preview bots of chat and social apps. They don't run JavaScript, so they get a small page with the
+# product's photo, name and price from the API instead of the app (Google is not listed: it runs the app).
+map $http_user_agent $social_bot {
+    default 0;
+    ~*(facebookexternalhit|facebookcatalog|meta-externalagent|WhatsApp|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Applebot|Embedly|Iframely) 1;
+}
+
 # Storefront
 server {
-    server_name woodsycart.in www.woodsycart.in;
+    server_name woodsycart.com;
     root /var/www/woodsy-web;
     index index.html;
 
-    location / { try_files $uri $uri/ /index.html; }               # Angular routes
+    location / {                                                   # Angular routes
+        error_page 418 = @preview;
+        if ($social_bot) { return 418; }                           # preview bots → @preview
+        try_files $uri $uri/ /index.html;
+    }
+    location @preview { proxy_pass http://127.0.0.1:5100/api/seo/preview?path=$uri; }
     location = /index.html  { add_header Cache-Control "no-cache"; }
     location = /ngsw.json   { add_header Cache-Control "no-cache"; }  # lets the PWA see updates
+    location = /config.json { add_header Cache-Control "no-cache"; }  # live addresses (section 8.1)
+
+    # Search engines: built live by the API from the catalogue
+    location = /robots.txt  { proxy_pass http://127.0.0.1:5100/api/seo/robots.txt; }
+    location = /sitemap.xml { proxy_pass http://127.0.0.1:5100/api/seo/sitemap.xml; }
     location ~* \.(js|css|woff2?|png|jpg|svg|webp|ico)$ { expires 30d; add_header Cache-Control "public"; }
 }
 
 # Admin
 server {
-    server_name admin.woodsycart.in;
+    server_name admin.woodsycart.com;
     root /var/www/woodsy-admin;
     index index.html;
 
     location / { try_files $uri $uri/ /index.html; }
     location = /index.html  { add_header Cache-Control "no-cache"; }
     location = /ngsw.json   { add_header Cache-Control "no-cache"; }
+    location = /config.json { add_header Cache-Control "no-cache"; }
     location ~* \.(js|css|woff2?|png|jpg|svg|webp|ico)$ { expires 30d; add_header Cache-Control "public"; }
 }
 
 # API (+ photos under /media)
 server {
-    server_name api.woodsycart.in;
+    server_name api.woodsycart.com;
     client_max_body_size 25m;                       # photo uploads from admin
 
     location /media/ {                              # serve photos straight from disk (fast)
@@ -390,6 +449,20 @@ server {
         proxy_read_timeout 300s;                    # long admin jobs (vendor sync)
     }
 }
+
+# ---------- Redirects: www and the .in domain → woodsycart.com (permanent) ----------
+server {
+    server_name www.woodsycart.com woodsycart.in www.woodsycart.in;
+    return 301 https://woodsycart.com$request_uri;
+}
+server {
+    server_name admin.woodsycart.in;
+    return 301 https://admin.woodsycart.com$request_uri;
+}
+server {
+    server_name api.woodsycart.in;
+    return 308 https://api.woodsycart.com$request_uri;   # 308 keeps POSTs (old payment alerts / webhooks) working
+}
 ```
 
 ```bash
@@ -397,11 +470,19 @@ sudo ln -s /etc/nginx/sites-available/woodsycart /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 
-# Free HTTPS certificates (renew automatically)
-sudo certbot --nginx -d woodsycart.in -d www.woodsycart.in -d admin.woodsycart.in -d api.woodsycart.in
+# Free HTTPS certificates (renew automatically). The .in names need certificates too,
+# so https://woodsycart.in redirects without a browser warning.
+sudo certbot --nginx -d woodsycart.com -d www.woodsycart.com -d admin.woodsycart.com -d api.woodsycart.com \
+                     -d woodsycart.in -d www.woodsycart.in -d admin.woodsycart.in -d api.woodsycart.in
 ```
 
-Open `https://woodsycart.in` and `https://admin.woodsycart.in` and log in.
+Check the redirects: `curl -I https://woodsycart.in/shop` should answer `301` with `location: https://woodsycart.com/shop`.
+
+Check link previews: `curl -A WhatsApp https://woodsycart.com/product/<any-product-slug>` should return a short page whose `og:title`, `og:image` and `og:description` show the product. Facebook's [Sharing Debugger](https://developers.facebook.com/tools/debug/) shows exactly what WhatsApp / Instagram / Facebook will display (use **Scrape Again** after changing a product).
+
+Check search files: `curl https://woodsycart.com/robots.txt` should end with `Sitemap: https://woodsycart.com/sitemap.xml`, and `https://woodsycart.com/sitemap.xml` should list your products. If they show `localhost`, `Smtp__StorefrontUrl` / `Smtp__ApiUrl` are not set in `api.env`.
+
+Open `https://woodsycart.com` and `https://admin.woodsycart.com` and log in.
 
 ---
 
@@ -446,9 +527,9 @@ In **Admin → Payment integrations**:
 
 - **Direct UPI:** enter your business UPI ID and payee name.
 - **Payment alert forwarder** (the app on your phone that forwards bank or UPI SMS): change its target to
-  `https://api.woodsycart.in/api/payments/upi/alert`, keeping the same alert key.
+  `https://api.woodsycart.com/api/payments/upi/alert`, keeping the same alert key.
 - **Razorpay** (when you add it): set its webhook in the Razorpay dashboard to
-  `https://api.woodsycart.in/api/payments/razorpay/webhook`, and enter its keys in Admin.
+  `https://api.woodsycart.com/api/payments/razorpay/webhook`, and enter its keys in Admin.
 
 Place one small real order end to end (pay ₹1–10) before announcing the site.
 
@@ -508,9 +589,14 @@ That needs the same small change (send images instead of file paths), plus movin
 
 ## 15. Go-live checklist
 
-- [ ] DNS A records for `woodsycart.in`, `www`, `admin` and `api` point to the server
-- [ ] `https://` works on all four, and the certificate auto-renews (`sudo certbot renew --dry-run`)
+- [ ] DNS A records for `woodsycart.com` and `woodsycart.in` (`@`, `www`, `admin`, `api` on each) point to the server
+- [ ] `https://` works on all eight names, and the certificate auto-renews (`sudo certbot renew --dry-run`)
+- [ ] `https://woodsycart.in`, `https://www.woodsycart.com` and `https://admin.woodsycart.in` redirect to `.com`
+- [ ] Every outside service in [urls-and-domains.md](urls-and-domains.md) updated (Google Maps key, Razorpay, alert forwarder, Search Console)
 - [ ] `/etc/woodsycart/api.env` filled in: DB, `Jwt__Key`, CORS origins, SMTP, admin seed
+- [ ] `config.json` in `/var/www/woodsy-web` and `/var/www/woodsy-admin` has the live addresses (not localhost)
+- [ ] `https://woodsycart.com/robots.txt` and `/sitemap.xml` show `woodsycart.com` addresses; sitemap submitted in Google Search Console
+- [ ] A product link pasted in WhatsApp shows its photo, name and price; Google's [Rich Results Test](https://search.google.com/test/rich-results) finds **Product** and **Breadcrumb** on a product page
 - [ ] Database restored, and test orders and customers removed
 - [ ] `/var/woodsycart/media` and `/var/woodsycart/keys` copied, and the links in the API folder created
 - [ ] `systemctl status woodsycart-api` is **active**, and the API restarts after a server reboot

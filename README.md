@@ -56,7 +56,7 @@ Prerequisites: .NET 9 SDK, SQL Server (connection string in `appsettings.json`, 
    ```
 
    - API: http://localhost:5100, Swagger: http://localhost:5100/swagger
-   - Admin login: `admin@woodsycart.in` + the `Seed:AdminPassword` value. Change it from **Admin → Settings → Team & security** after first login.
+   - Admin login: `admin@woodsycart.com` + the `Seed:AdminPassword` value. Change it from **Admin → Settings → Team & security** after first login.
 
 3. Import the vendor catalogue: **Admin → Vendor & catalogue sync → Sync now** (takes about 5 minutes the first time).
 
