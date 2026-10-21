@@ -7,7 +7,7 @@ using WoodsyCart.Infrastructure.Data;
 
 namespace WoodsyCart.Infrastructure.Services;
 
-public class CatalogService(AppDbContext db, IMemoryCache cache)
+public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender email)
 {
     public const string CategoriesCacheKey = "catalog:categories";
 
@@ -260,18 +260,39 @@ public class CatalogService(AppDbContext db, IMemoryCache cache)
         return new PagedResult<ReviewDto> { Items = items, Total = total, Page = page, PageSize = 10 };
     }
 
+    /// <summary>The customer's latest delivered (or returned) order containing the product, and whether they reviewed it.</summary>
+    public async Task<MyReviewStatusDto> GetMyReviewStatusAsync(int productId, int userId)
+    {
+        var orderNumber = await db.OrderItems.Where(i => i.ProductId == productId && i.Order!.UserId == userId &&
+                (i.Order.Status == Domain.OrderStatus.Delivered || i.Order.Status == Domain.OrderStatus.Returned))
+            .OrderByDescending(i => i.OrderId).Select(i => i.Order!.OrderNumber).FirstOrDefaultAsync();
+        var reviewed = await db.Reviews.AnyAsync(r => r.ProductId == productId && r.UserId == userId);
+        return new MyReviewStatusDto(orderNumber is not null, orderNumber, reviewed);
+    }
+
     public async Task AddReviewAsync(int productId, int userId, CreateReviewRequest req)
     {
         if (req.Rating is < 1 or > 5) throw new AppException("Rating must be between 1 and 5.");
         if (!await db.Products.AnyAsync(p => p.Id == productId)) throw new AppException("Product not found", 404);
         if (await db.Reviews.AnyAsync(r => r.ProductId == productId && r.UserId == userId)) throw new AppException("You have already reviewed this product.");
-        var verified = await db.OrderItems.AnyAsync(i => i.ProductId == productId && i.Order!.UserId == userId && i.Order.Status == Domain.OrderStatus.Delivered);
+        var orderId = await db.OrderItems.Where(i => i.ProductId == productId && i.Order!.UserId == userId &&
+                (i.Order.Status == Domain.OrderStatus.Delivered || i.Order.Status == Domain.OrderStatus.Returned))
+            .OrderByDescending(i => i.OrderId).Select(i => (int?)i.OrderId).FirstOrDefaultAsync();
+        // Reviews come only from customers who received the product
+        if (orderId is null) throw new AppException("Only customers who received this product can review it. You can rate it from your order page after delivery.");
+        var verified = true;
         db.Reviews.Add(new Review
         {
-            ProductId = productId, UserId = userId, Rating = req.Rating,
+            ProductId = productId, UserId = userId, Rating = req.Rating, OrderId = orderId,
             Title = req.Title?.Trim(), Comment = req.Comment?.Trim(), IsVerifiedPurchase = verified
         });
         await db.SaveChangesAsync();
+        var product = await db.Products.AsNoTracking().Where(p => p.Id == productId).Select(p => p.Name).FirstAsync();
+        var who = await db.Users.AsNoTracking().Where(u => u.Id == userId).Select(u => u.FullName).FirstAsync();
+        await email.AdminsAsync(Email.EmailEvent.AdminNewReview, $"New {req.Rating}★ review — {product}", "A review is waiting for approval",
+            $"<p><b>{Email.EmailTemplates.E(who)}</b>{(verified ? " (verified buyer)" : "")} rated <b>{Email.EmailTemplates.E(product)}</b> {new string('★', req.Rating)}{new string('☆', 5 - req.Rating)}</p>" +
+            Email.EmailTemplates.Info($"<b>{Email.EmailTemplates.E(req.Title)}</b> {Email.EmailTemplates.E(req.Comment)}"),
+            ("Approve or hide", email.AdminUrl + "/reviews"));
     }
 
     public static async Task RefreshRatingAsync(AppDbContext db, int productId)

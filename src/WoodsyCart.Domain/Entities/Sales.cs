@@ -10,6 +10,11 @@ public class Order : BaseEntity
     public OrderStatus Status { get; set; } = OrderStatus.Pending;
     public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
     public PaymentMethod PaymentMethod { get; set; }
+    public SalesChannel Channel { get; set; } = SalesChannel.Website;
+    /// <summary>Where on the channel, e.g. the Instagram handle or chat the order came from.</summary>
+    public string? ChannelReference { get; set; }
+    /// <summary>Team member who entered a manual order (null for website orders).</summary>
+    public string? CreatedByStaff { get; set; }
 
     // Shipping address snapshot
     public string ShipName { get; set; } = "";
@@ -21,6 +26,9 @@ public class Order : BaseEntity
     public string ShipCity { get; set; } = "";
     public string ShipState { get; set; } = "";
     public string ShipPincode { get; set; } = "";
+    /// <summary>Delivery point from the map picker (optional) — shared with the vendor as a Google Maps link.</summary>
+    public double? ShipLatitude { get; set; }
+    public double? ShipLongitude { get; set; }
     public string? CustomerGstin { get; set; }
 
     public decimal SubTotal { get; set; }        // sum of line totals (GST inclusive)
@@ -118,6 +126,10 @@ public class Payment : BaseEntity
     public string? Reference { get; set; }
     public DateTime PaidAt { get; set; } = DateTime.UtcNow;
     public string? Notes { get; set; }
+    /// <summary>Gateway's own fee for this payment, incl. GST (null = not known yet). Also booked as an expense.</summary>
+    public decimal? GatewayFee { get; set; }
+    /// <summary>GST part of GatewayFee, as reported by the gateway.</summary>
+    public decimal? GatewayFeeTax { get; set; }
 }
 
 public class Refund : BaseEntity

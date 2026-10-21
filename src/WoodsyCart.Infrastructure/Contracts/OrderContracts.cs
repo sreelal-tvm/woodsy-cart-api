@@ -17,10 +17,10 @@ public record QuoteDto(
     int DeliveryDays, List<string> Messages, decimal OfferSavings = 0);
 
 public record AddressDto(int Id, string Label, string FullName, string Phone, string Line1, string? Line2, string? Landmark,
-    string City, string State, string Pincode, bool IsDefault);
+    string City, string State, string Pincode, bool IsDefault, double? Latitude = null, double? Longitude = null);
 
 public record AddressRequest(string Label, string FullName, string Phone, string Line1, string? Line2, string? Landmark,
-    string City, string State, string Pincode, bool IsDefault);
+    string City, string State, string Pincode, bool IsDefault, double? Latitude = null, double? Longitude = null);
 
 public record PlaceOrderRequest(
     List<CartLineRequest> Items, int? AddressId, AddressRequest? Address, string? CouponCode,
@@ -61,7 +61,14 @@ public record OrderDetailDto(
     string? TrackingNumber, string? CourierName, string? CancelReason,
     List<OrderItemDto> Items, List<OrderHistoryDto> History, bool CanCancel, bool CanReturn, bool HasInvoice, string? InvoiceNumber,
     string? PaymentProvider = null, PaymentInstructionsDto? Payment = null,
-    DateTime? OriginalDeliveryDate = null, string? DeliveryDateReason = null, DateTime? DeliveryDateChangedAt = null);
+    DateTime? OriginalDeliveryDate = null, string? DeliveryDateReason = null, DateTime? DeliveryDateChangedAt = null,
+    bool CanReview = false, List<OrderReviewDto>? Reviews = null);
+
+/// <summary>The customer's own review of a product in this order (shown on the order page, approved or not).</summary>
+public record OrderReviewDto(int ProductId, int Rating, string? Title, string? Comment, bool IsApproved, DateTime WrittenAt);
+
+/// <summary>Rate a delivered item from the order page. Writing again edits the earlier review.</summary>
+public record OrderReviewRequest(int ProductId, int Rating, string? Title, string? Comment);
 
 public record CancelOrderRequest(string Reason);
 

@@ -11,7 +11,7 @@ namespace WoodsyCart.Infrastructure.Services;
 /// <summary>Who is asking for an order: a signed-in customer, or anyone holding the order's secret access token (guest checkout).</summary>
 public record OrderAccess(int? UserId, string? Token);
 
-public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender email, PaymentConfigService payments)
+public partial class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender email, PaymentConfigService payments)
 {
     public const int ReturnWindowDays = 7;
 
@@ -82,7 +82,18 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         return (c, discount, $"Coupon applied — you save ₹{discount:N0}.");
     }
 
-    public async Task<PincodeCheckDto> CheckPincodeAsync(string? pincode)
+    /// <summary>Within this distance of the city centre, an unlisted pincode gets "WhatsApp us" instead of a flat no.</summary>
+    private const double NearbyKm = 50;
+
+    public static double KmFromBengaluru(double lat, double lng)
+    {
+        const double cLat = 12.9716, cLng = 77.5946, r = 6371;
+        double Rad(double d) => d * Math.PI / 180;
+        var a = Math.Pow(Math.Sin(Rad(lat - cLat) / 2), 2) + Math.Cos(Rad(cLat)) * Math.Cos(Rad(lat)) * Math.Pow(Math.Sin(Rad(lng - cLng) / 2), 2);
+        return 2 * r * Math.Asin(Math.Sqrt(a));
+    }
+
+    public async Task<PincodeCheckDto> CheckPincodeAsync(string? pincode, double? lat = null, double? lng = null)
     {
         var s = await db.BusinessSettings.AsNoTracking().FirstAsync();
         pincode = pincode?.Trim();
@@ -91,10 +102,15 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         var pin = await db.ServiceablePincodes.AsNoTracking().FirstOrDefaultAsync(p => p.Pincode == pincode && p.IsActive);
         if (pin is null)
             return s.RestrictToServiceablePincodes
-                ? new PincodeCheckDto(pincode, false, 0, 0, false, null, "Sorry, we don't deliver to this pincode yet. We currently serve Bengaluru.")
+                ? (lat is { } la && lng is { } lo && KmFromBengaluru(la, lo) <= NearbyKm
+                    ? new PincodeCheckDto(pincode, false, 0, 0, false, null,
+                        "This pincode isn't on our delivery list yet, but your location is close to Bengaluru — message us on WhatsApp and we'll check if we can deliver.", true)
+                    : new PincodeCheckDto(pincode, false, 0, 0, false, null, "Sorry, we don't deliver to this pincode yet. We currently serve Bengaluru."))
                 : new PincodeCheckDto(pincode, true, s.DefaultDeliveryDays + 3, 0, false, null, "Delivery available. Cash on delivery not available.");
         return new PincodeCheckDto(pincode, true, pin.DeliveryDays, pin.ExtraCharge, pin.CodAvailable && s.CodEnabled, pin.Area,
-            $"Delivery in {pin.DeliveryDays}–{pin.DeliveryDays + 3} days{(pin.Area is null ? "" : " to " + pin.Area)}.");
+            $"Delivery in {pin.DeliveryDays}–{Math.Max(pin.DeliveryDaysMax ?? pin.DeliveryDays + 3, pin.DeliveryDays)} days{(pin.Area is null ? "" : " to " + pin.Area)}." +
+            (pin.ExtraCharge > 0 ? $" A delivery charge of ₹{pin.ExtraCharge:N0} applies for this area." : "") +
+            (s.CodEnabled && !pin.CodAvailable ? " Cash on delivery isn't available here." : ""));
     }
 
     public async Task<QuoteDto> QuoteAsync(QuoteRequest req, int? userId)
@@ -231,6 +247,7 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
             ShipName = address.FullName, ShipPhone = address.Phone, ShipEmail = user.Email,
             ShipLine1 = address.Line1, ShipLine2 = address.Line2, ShipLandmark = address.Landmark,
             ShipCity = address.City, ShipState = address.State, ShipPincode = address.Pincode,
+            ShipLatitude = address.Latitude, ShipLongitude = address.Longitude,
             CustomerGstin = string.IsNullOrWhiteSpace(req.CustomerGstin) ? null : req.CustomerGstin.Trim().ToUpper(),
             SubTotal = quote.SubTotal, Discount = quote.Discount, CouponCode = quote.CouponCode, OfferDiscount = lines.Sum(l => l.OfferSaving),
             ShippingFee = quote.ShippingFee, CodFee = quote.CodFee, Total = quote.Total, TaxAmount = quote.TaxAmount,
@@ -359,9 +376,7 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
             db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = order.Id, Status = OrderStatus.Confirmed, Note = "Payment received — thank you!" });
         }
         await db.SaveChangesAsync();
-        if (fullyPaid)
-            await email.SendAsync(order.ShipEmail, $"Payment received for order {order.OrderNumber}",
-                $"<p>We've received your payment of ₹{order.AmountPaid:N2} for order <b>{order.OrderNumber}</b>. Your furniture is now being prepared.</p><p>— Team WoodsyCart</p>");
+        await NotifyPaymentAsync(order, amount, $"{note}{(reference is null ? "" : $", ref {reference}")}");
     }
 
     /// <summary>Customer reports the UPI/bank reference after paying; it is matched against received alerts or verified by admin.</summary>
@@ -385,6 +400,7 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
             alert.OrderId = order.Id;
             await ConfirmPaymentAsync(order, alert.Amount.Value, utr, "matched by customer's UTR", "System");
         }
+        else await NotifyUtrSubmittedAsync(order, utr);
         return (await GetOrderAsync(orderNumber, access))!;
     }
 
@@ -425,11 +441,13 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
     public async Task MarkOnlinePaymentAsync(Order order, string paymentId)
     {
         if (await db.Payments.AnyAsync(p => p.GatewayPaymentId == paymentId)) return;
-        db.Payments.Add(new Payment
+        var payment = new Payment
         {
             OrderId = order.Id, Method = order.PaymentMethod, Amount = order.Total, IsSuccessful = true,
             GatewayOrderId = order.RazorpayOrderId, GatewayPaymentId = paymentId
-        });
+        };
+        db.Payments.Add(payment);
+        await ApplyGatewayDetailsAsync(order, payment);
         order.AmountPaid += order.Total;
         order.PaymentStatus = PaymentStatus.Paid;
         if (order.Status == OrderStatus.Pending)
@@ -439,19 +457,68 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         }
         await db.SaveChangesAsync();
         await NotifyOrderPlacedAsync(order);
+        await NotifyPaymentAsync(order, payment.Amount, payment.Notes ?? "paid online", toCustomer: false); // the order email already says it's paid
     }
 
-    private async Task NotifyOrderPlacedAsync(Order order)
+    /// <summary>
+    /// Fills in how a gateway payment was actually made (net banking with HDFC, card •••• 4242 …), the bank's reference and the
+    /// gateway fee. The customer may pick "UPI" at checkout and then pay another way on the gateway page, so the order's method
+    /// is corrected too. Best effort: payments stay valid without these details.
+    /// </summary>
+    private async Task ApplyGatewayDetailsAsync(Order order, Payment payment)
     {
-        // The link carries the order's access token so guests can open their order without an account.
-        var storefront = email.StorefrontUrl?.TrimEnd('/');
-        var link = string.IsNullOrEmpty(storefront) ? "" :
-            $"<p><a href=\"{storefront}/order/{order.OrderNumber}?token={order.AccessToken}\">View or track your order</a></p>";
-        var html = $"<h2>Thank you for your order!</h2><p>Your order <b>{order.OrderNumber}</b> of ₹{order.Total:N2} has been received. " +
-                   $"We will notify you as soon as it is dispatched.</p>{link}<p>— Team WoodsyCart</p>";
-        await email.SendAsync(order.ShipEmail, $"Order {order.OrderNumber} received", html);
-        await email.SendAsync(email.AdminEmail, $"New order {order.OrderNumber} — ₹{order.Total:N0}",
-            $"<p>New order from {order.ShipName} ({order.ShipPhone}), {order.ShipCity} {order.ShipPincode}.</p>");
+        if (payment.GatewayPaymentId is null) return;
+        RzpPayment? details;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)); // never hold up the order page
+            details = await razorpay.FetchPaymentAsync(payment.GatewayPaymentId, cts.Token);
+        }
+        catch { return; } // gateway unreachable: try again next time
+        if (details is null) { payment.Notes ??= "Razorpay · online payment"; payment.GatewayFee ??= 0; return; } // nothing to fetch — don't keep asking
+        if (details.OurMethod is { } m) { payment.Method = m; order.PaymentMethod = m; }
+        payment.Reference = details.BankReference ?? payment.Reference;
+        payment.Notes = details.Describe();
+        if (details.CreatedAt > 0) payment.PaidAt = DateTimeOffset.FromUnixTimeSeconds(details.CreatedAt).UtcDateTime;
+        if (details.Fee is { } fee)
+        {
+            payment.GatewayFee = fee / 100m;
+            payment.GatewayFeeTax = (details.Tax ?? 0) / 100m;
+            await BookGatewayFeeAsync(order, payment);
+        }
+    }
+
+    /// <summary>
+    /// The gateway's fee for a payment becomes an expense (Payment gateway fees), using the gateway's own fee and GST figures,
+    /// so Profit &amp; loss includes it. One expense per gateway payment; it can be edited in Finance → Expenses.
+    /// </summary>
+    private async Task BookGatewayFeeAsync(Order order, Payment payment)
+    {
+        if (payment.GatewayFee is not > 0 || payment.GatewayPaymentId is null) return;
+        if (await db.Expenses.AnyAsync(e => e.Reference == payment.GatewayPaymentId && e.Category == ExpenseCategory.PaymentGatewayFees)) return;
+        var tax = payment.GatewayFeeTax ?? 0;
+        db.Expenses.Add(new Expense
+        {
+            Date = DateTime.SpecifyKind(FinancialYear.ToIst(payment.PaidAt).Date, DateTimeKind.Utc),
+            Category = ExpenseCategory.PaymentGatewayFees,
+            Description = $"Razorpay fee — order {order.OrderNumber}",
+            Amount = payment.GatewayFee.Value - tax, GstAmount = tax,
+            PaidTo = "Razorpay", PaymentMode = "Deducted from settlement",
+            Reference = payment.GatewayPaymentId, OrderId = order.Id
+        });
+    }
+
+    /// <summary>Gateway payments recorded before details were fetched (or while the gateway was unreachable) get them now.</summary>
+    public async Task CompleteGatewayDetailsAsync(int orderId)
+    {
+        // Details not fetched yet, or the fee wasn't known yet (gateways can report it a little after the payment).
+        var recent = DateTime.UtcNow.AddDays(-30);
+        var missing = await db.Payments.Where(p => p.OrderId == orderId && p.GatewayPaymentId != null && p.IsSuccessful
+                                                   && (p.Notes == null || (p.GatewayFee == null && p.PaidAt > recent))).ToListAsync();
+        if (missing.Count == 0) return;
+        var order = await db.Orders.FirstAsync(o => o.Id == orderId);
+        foreach (var p in missing) await ApplyGatewayDetailsAsync(order, p);
+        await db.SaveChangesAsync();
     }
 
     /// <summary>
@@ -484,18 +551,7 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = o.Id, Status = o.Status, Note = note, VisibleToCustomer = true, CreatedBy = by });
         await db.SaveChangesAsync();
 
-        if (!notify) return;
-        var storefront = email.StorefrontUrl?.TrimEnd('/');
-        var link = string.IsNullOrEmpty(storefront) ? "" :
-            $"<p><a href=\"{storefront}/order/{o.OrderNumber}?token={o.AccessToken}\">View your order</a></p>";
-        var html = later && old is not null
-            ? $"<p>Hi {System.Net.WebUtility.HtmlEncode(o.ShipName)},</p><p>We're sorry — the delivery of your order <b>{o.OrderNumber}</b> will be a little later than planned.</p>" +
-              $"<p>New expected delivery date: <b>{when}</b> (was {old:ddd, d MMM}).</p>" +
-              (reason is null ? "" : $"<p>Reason: {System.Net.WebUtility.HtmlEncode(reason)}</p>") +
-              $"<p>Thank you for your patience. Reply to this email or WhatsApp us if you have any questions.</p>{link}<p>— Team WoodsyCart</p>"
-            : $"<p>Hi {System.Net.WebUtility.HtmlEncode(o.ShipName)},</p><p>Your order <b>{o.OrderNumber}</b> is now expected on <b>{when}</b>.</p>" +
-              (reason is null ? "" : $"<p>{System.Net.WebUtility.HtmlEncode(reason)}</p>") + $"{link}<p>— Team WoodsyCart</p>";
-        await email.SendAsync(o.ShipEmail, later && old is not null ? $"Order {o.OrderNumber}: new delivery date {date:d MMM}" : $"Order {o.OrderNumber}: delivery on {date:d MMM}", html);
+        if (notify) await NotifyDeliveryDateAsync(o, old, date, reason, later);
     }
 
     public static Address MapAddress(Address a, AddressRequest r)
@@ -508,6 +564,10 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         a.Line1 = r.Line1.Trim(); a.Line2 = r.Line2?.Trim(); a.Landmark = r.Landmark?.Trim();
         a.City = r.City.Trim(); a.State = r.State.Trim(); a.Pincode = r.Pincode.Trim();
         a.IsDefault = r.IsDefault;
+        // Only keep coordinates that are really in India (guards against a stray 0,0).
+        var inIndia = r.Latitude is >= 6 and <= 37 && r.Longitude is >= 68 and <= 98;
+        a.Latitude = inIndia ? Math.Round(r.Latitude!.Value, 6) : null;
+        a.Longitude = inIndia ? Math.Round(r.Longitude!.Value, 6) : null;
         return a;
     }
 
@@ -531,7 +591,7 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         else if (phone is not null) q = q.Where(o => o.ShipPhone.EndsWith(phone));
         else return null;
         var o = await q.FirstOrDefaultAsync();
-        return o is null ? null : ToDetail(o) with { Payment = await InstructionsAsync(o) };
+        return o is null ? null : ToDetail(o) with { Payment = await InstructionsAsync(o), Reviews = await ReviewsForAsync(o) };
     }
 
     public static OrderDetailDto ToDetail(Order o)
@@ -545,7 +605,7 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
                 i.Quantity, i.UnitMrp, i.UnitPrice, i.LineTotal, i.GstRate, i.HsnCode, i.UnitRegularPrice, i.OfferName)).ToList(),
             o.History.Where(h => h.VisibleToCustomer).OrderBy(h => h.CreatedAt).Select(h => new OrderHistoryDto(h.Status, h.Note, h.CreatedAt)).ToList(),
             CanCancel(o), CanReturn(o), invoice is not null, invoice?.InvoiceNumber, o.PaymentProvider, null,
-            o.OriginalDeliveryDate, o.DeliveryDateReason, o.DeliveryDateChangedAt);
+            o.OriginalDeliveryDate, o.DeliveryDateReason, o.DeliveryDateChangedAt, CanReview(o));
     }
 
     public static bool CanCancel(Order o) => o.Status is OrderStatus.Pending or OrderStatus.Confirmed;
@@ -557,10 +617,10 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
     {
         var o = await FindAsync(orderNumber, access);
         if (!CanCancel(o)) throw new AppException("This order can no longer be cancelled. Please contact support.");
-        await CancelAsync(o, reason, "Customer");
+        await CancelAsync(o, reason, "Customer", byCustomer: true);
     }
 
-    public async Task CancelAsync(Order o, string reason, string by)
+    public async Task CancelAsync(Order o, string reason, string by, bool byCustomer = false)
     {
         o.Status = OrderStatus.Cancelled;
         o.CancelledAt = DateTime.UtcNow;
@@ -571,8 +631,7 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         if (o.AmountPaid > 0 && !await db.Refunds.AnyAsync(r => r.OrderId == o.Id && r.Type == RefundType.Cancellation))
             db.Refunds.Add(new Refund { OrderId = o.Id, Type = RefundType.Cancellation, Amount = o.AmountPaid, Reason = reason, Status = RefundStatus.Approved });
         await db.SaveChangesAsync();
-        await email.SendAsync(o.ShipEmail, $"Order {o.OrderNumber} cancelled",
-            $"<p>Your order {o.OrderNumber} has been cancelled.{(o.AmountPaid > 0 ? " Your refund of ₹" + o.AmountPaid.ToString("N2") + " will be processed within 5–7 working days." : "")}</p>");
+        await NotifyCancelledAsync(o, reason, byCustomer);
     }
 
     public async Task RequestReturnAsync(OrderAccess access, string orderNumber, ReturnRequest req)
@@ -583,6 +642,6 @@ public class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender
         db.Refunds.Add(new Refund { OrderId = o.Id, Type = RefundType.Return, Amount = o.AmountPaid > 0 ? o.AmountPaid : o.Total, Reason = req.Reason, CustomerComment = req.Comment });
         db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = o.Id, Status = o.Status, Note = $"Return requested: {req.Reason}", CreatedBy = "Customer" });
         await db.SaveChangesAsync();
-        await email.SendAsync(email.AdminEmail, $"Return requested for {o.OrderNumber}", $"<p>Reason: {req.Reason}</p><p>{req.Comment}</p>");
+        await NotifyReturnRequestedAsync(o, req.Reason, req.Comment);
     }
 }

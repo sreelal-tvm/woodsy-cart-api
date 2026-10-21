@@ -440,7 +440,7 @@ public record CustomerDetail(int Id, string FullName, string Email, string? Phon
     List<WoodsyCart.Infrastructure.Contracts.AddressDto> Addresses, List<WoodsyCart.Infrastructure.Contracts.OrderSummaryDto> RecentOrders, List<object> Reviews);
 public record CustomerUpdate(bool IsActive, string? Notes);
 
-public class CustomersController(AppDbContext db) : AdminControllerBase
+public class CustomersController(AppDbContext db, AuthService auth) : AdminControllerBase
 {
     [HttpGet]
     public async Task<PagedResult<CustomerRow>> List(string? search, string sort = "newest", int page = 1, int pageSize = 25)
@@ -457,7 +457,7 @@ public class CustomersController(AppDbContext db) : AdminControllerBase
         };
         var total = await q.CountAsync();
         var items = await ordered.ThenByDescending(u => u.Id).Skip((Math.Max(1, page) - 1) * pageSize).Take(pageSize)
-            .Select(u => new CustomerRow(u.Id, u.FullName, u.Email, u.Phone, u.IsActive, u.IsGuest,
+            .Select(u => new CustomerRow(u.Id, u.FullName, u.Email.EndsWith("@no-email.woodsycart") ? "" : u.Email, u.Phone, u.IsActive, u.IsGuest,
                 u.Orders.Count(o => o.Status != OrderStatus.Cancelled),
                 u.Orders.Where(o => o.Status != OrderStatus.Cancelled).Sum(o => (decimal?)o.Total) ?? 0,
                 u.Orders.Max(o => (DateTime?)o.CreatedAt), u.CreatedAt,
@@ -480,12 +480,21 @@ public class CustomersController(AppDbContext db) : AdminControllerBase
                 o.ExpectedDeliveryDate, o.DeliveryDateChangedAt)).ToListAsync();
         var reviews = await db.Reviews.AsNoTracking().Where(r => r.UserId == id).OrderByDescending(r => r.CreatedAt)
             .Select(r => (object)new { r.Id, r.Rating, r.Title, r.Comment, r.IsApproved, r.CreatedAt, Product = r.Product!.Name }).ToListAsync();
-        return new CustomerDetail(u.Id, u.FullName, u.Email, u.Phone, u.IsActive, u.IsGuest, u.Notes, u.CreatedAt, u.LastLoginAt, count, spent,
+        return new CustomerDetail(u.Id, u.FullName, OrderService.IsPlaceholderEmail(u.Email) ? "" : u.Email, u.Phone, u.IsActive, u.IsGuest, u.Notes, u.CreatedAt, u.LastLoginAt, count, spent,
             count == 0 ? 0 : Math.Round(spent / count, 2),
             await db.WishlistItems.CountAsync(w => w.UserId == id), await db.CartItems.CountAsync(c => c.UserId == id),
             u.Addresses.Select(a => new WoodsyCart.Infrastructure.Contracts.AddressDto(a.Id, a.Label, a.FullName, a.Phone, a.Line1, a.Line2, a.Landmark, a.City, a.State, a.Pincode, a.IsDefault)).ToList(),
             recent, reviews);
     }
+
+    [HttpGet("{id:int}/password")]
+    public Task<CustomerPasswordStatus> PasswordStatus(int id) => auth.PasswordStatusAsync(id);
+
+    [HttpPost("{id:int}/password/reset-link")]
+    public Task<CustomerPasswordStatus> SendResetLink(int id) => auth.AdminSendResetLinkAsync(id);
+
+    [HttpPost("{id:int}/password")]
+    public Task<CustomerPasswordStatus> SetPassword(int id, AdminSetPasswordRequest req) => auth.AdminSetPasswordAsync(id, req, UserName);
 
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, CustomerUpdate r)

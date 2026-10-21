@@ -17,7 +17,7 @@ public record AlertResult(int AlertId, PaymentAlertStatus Status, decimal? Amoun
 /// Confirms direct-UPI and bank-transfer payments without a gateway: the owner's phone forwards every
 /// "money received" SMS / app notification here; we read the amount and UPI reference and match the order.
 /// </summary>
-public partial class PaymentAlertService(AppDbContext db, OrderService orders)
+public partial class PaymentAlertService(AppDbContext db, OrderService orders, EmailSender email)
 {
     [GeneratedRegex(@"\b(credited|received|deposited|has sent you|paid you|money received|payment received|credit(?:ed)? (?:to|in|of))\b", RegexOptions.IgnoreCase)]
     private static partial Regex CreditWords();
@@ -134,6 +134,7 @@ public partial class PaymentAlertService(AppDbContext db, OrderService orders)
             {
                 alert.Note = $"{candidates.Count} unpaid orders have this amount — confirm manually.";
                 await db.SaveChangesAsync();
+                await NotifyUnmatchedAsync(alert);
                 return Result(alert, null, alert.Note);
             }
         }
@@ -142,6 +143,7 @@ public partial class PaymentAlertService(AppDbContext db, OrderService orders)
         {
             alert.Note = "No unpaid order with this amount or reference — check it in Payment integrations → UPI verification.";
             await db.SaveChangesAsync();
+            await NotifyUnmatchedAsync(alert);
             return Result(alert, null, alert.Note);
         }
 
@@ -165,6 +167,12 @@ public partial class PaymentAlertService(AppDbContext db, OrderService orders)
         await orders.ConfirmPaymentAsync(order, alert.Amount.Value, alert.Utr, "confirmed manually from payment alert", by);
         return Result(alert, order.OrderNumber, $"Order {order.OrderNumber} marked paid.");
     }
+
+    private Task NotifyUnmatchedAsync(PaymentAlert a) =>
+        email.AdminsAsync(Email.EmailEvent.AdminUnmatchedPayment, $"₹{a.Amount:N2} received — match it to an order", "Money received, but no order matched",
+            $"<p>A payment of <b>₹{a.Amount:N2}</b>{(a.Utr is null ? "" : $" (UPI ref <b>{a.Utr}</b>)")} arrived and couldn't be matched automatically.</p>" +
+            Email.EmailTemplates.Info(Email.EmailTemplates.E(a.Note)) + "<p>Match it to the right order in Payment integrations → UPI verification.</p>",
+            ("Match the payment", email.AdminUrl + "/payments"));
 
     private static AlertResult Result(PaymentAlert a, string? orderNumber, string message) =>
         new(a.Id, a.Status, a.Amount, a.Utr, orderNumber, message);

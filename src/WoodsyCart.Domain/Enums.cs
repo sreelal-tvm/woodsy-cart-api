@@ -37,6 +37,9 @@ public enum DiscountType { Percent = 0, Flat = 1 }
 
 public enum OfferScope { AllProducts = 0, Categories = 1, Products = 2 }
 
+/// <summary>Where an order came from. Website orders are placed by customers; the rest are entered in Admin.</summary>
+public enum SalesChannel { Website = 0, Instagram = 1, Facebook = 2, WhatsApp = 3, Phone = 4, WalkIn = 5, Other = 6 }
+
 public enum EnquiryStatus { New = 0, InProgress = 1, Closed = 2 }
 
 public enum SyncStatus { Running = 0, Completed = 1, Failed = 2 }

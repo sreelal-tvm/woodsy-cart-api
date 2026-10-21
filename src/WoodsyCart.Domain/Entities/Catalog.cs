@@ -192,6 +192,9 @@ public class Review : BaseEntity
     public string? Comment { get; set; }
     public bool IsApproved { get; set; }
     public bool IsVerifiedPurchase { get; set; }
+    /// <summary>The delivered order the review was written from (null for older reviews).</summary>
+    public int? OrderId { get; set; }
+    public Order? Order { get; set; }
 }
 
 public class Banner : BaseEntity

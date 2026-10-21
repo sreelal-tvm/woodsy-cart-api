@@ -173,6 +173,10 @@ public class BusinessSettings : BaseEntity
     public decimal CodFee { get; set; }
     public decimal CodMaxOrderAmount { get; set; } = 50000;
     public bool RestrictToServiceablePincodes { get; set; } = true;
+    /// <summary>Show the Google map / location search on address forms.</summary>
+    public bool MapsEnabled { get; set; }
+    /// <summary>Google Maps Platform browser key (public by design — restrict it to your domains in Google Cloud).</summary>
+    public string? GoogleMapsApiKey { get; set; }
     public int DefaultDeliveryDays { get; set; } = 7;
 
     // Product photo clean-up (Admin → Image clean-up)

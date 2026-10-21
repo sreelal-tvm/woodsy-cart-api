@@ -34,6 +34,9 @@ public static class DependencyInjection
         services.AddScoped<ProductOptionsService>();
         services.AddHostedService<OfferPriceWorker>();
         services.AddScoped<EmailSender>();
+        services.AddScoped<Email.EmailSettingsService>();
+        services.AddSingleton<Email.EmailQueue>();
+        services.AddHostedService<Email.EmailWorker>();
         services.AddScoped<DbSeeder>();
         services.AddHttpClient<RazorpayService>();
 

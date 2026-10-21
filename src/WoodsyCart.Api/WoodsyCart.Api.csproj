@@ -17,6 +17,13 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.6" />
   </ItemGroup>
 
+  <!-- Never published: local secrets, and data that lives on the server (photos, encryption keys, live settings) -->
+  <ItemGroup>
+    <Content Update="appsettings.Development.json;appsettings.Production.json" CopyToPublishDirectory="Never" />
+    <Content Update="wwwroot\media\**" CopyToPublishDirectory="Never" />
+    <None Update="App_Data\**" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\WoodsyCart.Infrastructure\WoodsyCart.Infrastructure.csproj" />
     <ProjectReference Include="..\WoodsyCart.Domain\WoodsyCart.Domain.csproj" />

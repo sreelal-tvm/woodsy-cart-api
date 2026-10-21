@@ -40,6 +40,7 @@ public partial class VendorSyncService(
     FileStorage storage,
     SyncProgress progress,
     Images.ImageCleaningQueue cleaningQueue,
+    EmailSender email,
     ILogger<VendorSyncService> logger)
 {
     public async Task RunAsync(int vendorId, SyncOptions options, CancellationToken ct)
@@ -169,6 +170,15 @@ public partial class VendorSyncService(
             db.ChangeTracker.Clear();
             db.VendorSyncLogs.Update(log);
             await db.SaveChangesAsync(CancellationToken.None);
+            if (log.Status == SyncStatus.Failed || log.PriceChanges > 0 || log.ProductsAdded > 0)
+                await email.AdminsAsync(Email.EmailEvent.AdminVendorSync,
+                    log.Status == SyncStatus.Failed ? "Vendor sync failed" : $"Vendor sync: {log.PriceChanges} price changes, {log.ProductsAdded} new products",
+                    log.Status == SyncStatus.Failed ? "The vendor sync failed" : "Vendor sync finished",
+                    log.Status == SyncStatus.Failed
+                        ? $"<p>The catalogue sync stopped with an error:</p>{Email.EmailTemplates.Info(Email.EmailTemplates.E(log.Message), "#fef2f2", "#ef4444")}<p>Try <b>Sync now</b> again later; the store keeps the last good data.</p>"
+                        : $"<p>Found {log.ProductsFound} products: <b>{log.ProductsAdded}</b> new, {log.ProductsUpdated} updated, <b>{log.PriceChanges}</b> price changes, {log.ProductsDeactivated} removed.</p>" +
+                          (log.PriceChanges > 0 ? "<p>Selling prices were recalculated. Review the changes and accept them.</p>" : ""),
+                    log.PriceChanges > 0 ? ("Review price changes", email.AdminUrl + "/products?status=price-changed") : ("Open products", email.AdminUrl + "/products"));
         }
     }
 
@@ -356,7 +366,8 @@ public partial class VendorSyncService(
             // Variant images often repeat product images under a new id — skip identical URLs.
             if (p.Images.Any(i => i.Url == img.BestUrl())) continue;
             // The vendor sometimes stores YouTube links as "images" — keep them as embeddable videos.
-            var youTubeId = ImageOptimizer.YouTubeId(img.ImageUrl);
+            // (sometimes the link is garbled and the real one is only in the thumbnail field)
+            var youTubeId = ImageOptimizer.YouTubeId(img.ImageUrl) ?? ImageOptimizer.YouTubeId(img.ThumbnailUrl);
             p.Images.Add(new ProductImage
             {
                 VendorImageId = img.ImageId,
@@ -557,7 +568,7 @@ public partial class VendorSyncService(
         foreach (var img in images)
         {
             progress.Processed++;
-            var yt = ImageOptimizer.YouTubeId(img.Url);
+            var yt = ImageOptimizer.YouTubeId(img.Url) ?? ImageOptimizer.YouTubeId(img.ThumbnailUrl);
             if (yt is not null)
             {
                 storage.Delete(img.LocalPath);

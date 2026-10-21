@@ -11,7 +11,7 @@ namespace WoodsyCart.Api.Controllers.Admin;
 
 public record AdminOrderRow(int Id, string OrderNumber, DateTime CreatedAt, int UserId, string Customer, string Phone, string City, string Pincode,
     OrderStatus Status, PaymentStatus PaymentStatus, PaymentMethod PaymentMethod, decimal Total, decimal AmountPaid, decimal EstimatedCost,
-    int ItemCount, bool HasPurchaseOrder, bool HasVendorBill, bool HasInvoice);
+    int ItemCount, bool HasPurchaseOrder, bool HasVendorBill, bool HasInvoice, SalesChannel Channel = SalesChannel.Website);
 
 public record AdminOrderItem(int Id, int ProductId, int? VariantId, string ProductName, string? VariantName, string? ImageUrl, int Quantity,
     decimal UnitMrp, decimal UnitPrice, decimal LineTotal, decimal UnitVendorPrice, decimal UnitVendorCost, decimal GstRate, string? HsnCode, long? VendorProductId, string? VendorUrl);
@@ -33,7 +33,10 @@ public record AdminOrderDetail(
     List<AdminOrderItem> Items, List<AdminHistory> History, List<AdminPayment> Payments, List<AdminRefund> Refunds,
     AdminPo? PurchaseOrder, List<AdminBillRef> VendorBills, List<AdminInvoiceRef> Invoices, List<OrderStatus> NextStatuses,
     string? PaymentProvider = null, decimal? UpiAmount = null, string? CustomerUtr = null,
-    DateTime? OriginalDeliveryDate = null, string? DeliveryDateReason = null, DateTime? DeliveryDateChangedAt = null);
+    DateTime? OriginalDeliveryDate = null, string? DeliveryDateReason = null, DateTime? DeliveryDateChangedAt = null,
+    SalesChannel Channel = SalesChannel.Website, string? ChannelReference = null, string? CreatedByStaff = null,
+    double? ShipLatitude = null, double? ShipLongitude = null, string? MapUrl = null);
+public record ManualQuoteRequest(List<ManualOrderLine> Items, decimal Discount, decimal? ShippingFee, string? Pincode);
 public record DeliveryDateRequest(DateTime Date, string? Reason, bool NotifyCustomer = true);
 
 public record StatusUpdate(OrderStatus Status, string? Note, bool VisibleToCustomer, string? TrackingNumber, string? CourierName,
@@ -49,7 +52,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
 {
     [HttpGet]
     public async Task<PagedResult<AdminOrderRow>> List(string? search, OrderStatus? status, PaymentStatus? paymentStatus, PaymentMethod? paymentMethod,
-        DateTime? from, DateTime? to, string? view, int page = 1, int pageSize = 25)
+        DateTime? from, DateTime? to, string? view, SalesChannel? channel = null, int page = 1, int pageSize = 25)
     {
         var q = db.Orders.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(search))
@@ -57,6 +60,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
         if (status is not null) q = q.Where(o => o.Status == status);
         if (paymentStatus is not null) q = q.Where(o => o.PaymentStatus == paymentStatus);
         if (paymentMethod is not null) q = q.Where(o => o.PaymentMethod == paymentMethod);
+        if (channel is not null) q = q.Where(o => o.Channel == channel);
         if (from is not null) q = q.Where(o => o.CreatedAt >= from);
         if (to is not null) q = q.Where(o => o.CreatedAt < to.Value.AddDays(1));
         q = view switch
@@ -72,7 +76,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
         var items = await q.OrderByDescending(o => o.CreatedAt).Skip((Math.Max(1, page) - 1) * pageSize).Take(pageSize)
             .Select(o => new AdminOrderRow(o.Id, o.OrderNumber, o.CreatedAt, o.UserId, o.ShipName, o.ShipPhone, o.ShipCity, o.ShipPincode,
                 o.Status, o.PaymentStatus, o.PaymentMethod, o.Total, o.AmountPaid, o.EstimatedCost, o.Items.Sum(i => i.Quantity),
-                o.PurchaseOrder != null, db.VendorBills.Any(b => b.OrderId == o.Id), o.Invoices.Any(i => !i.IsCancelled)))
+                o.PurchaseOrder != null, db.VendorBills.Any(b => b.OrderId == o.Id), o.Invoices.Any(i => !i.IsCancelled), o.Channel))
             .ToListAsync();
         return new PagedResult<AdminOrderRow> { Items = items, Total = total, Page = page, PageSize = pageSize };
     }
@@ -87,6 +91,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
     [HttpGet("{id:int}")]
     public async Task<AdminOrderDetail> Get(int id)
     {
+        await orders.CompleteGatewayDetailsAsync(id);
         var o = await db.Orders.AsNoTracking()
             .Include(x => x.User).Include(x => x.Items).Include(x => x.History).Include(x => x.Payments).Include(x => x.Refunds)
             .Include(x => x.PurchaseOrder).ThenInclude(p => p!.Vendor).Include(x => x.Invoices)
@@ -99,7 +104,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
         var po = o.PurchaseOrder;
 
         return new AdminOrderDetail(o.Id, o.OrderNumber, o.CreatedAt, o.Status, o.PaymentStatus, o.PaymentMethod,
-            o.UserId, o.User!.FullName, o.User.Email, o.User.Phone,
+            o.UserId, o.User!.FullName, OrderService.IsPlaceholderEmail(o.User.Email) ? "" : o.User.Email, o.User.Phone,
             o.ShipName, o.ShipPhone, o.ShipEmail, o.ShipLine1, o.ShipLine2, o.ShipLandmark, o.ShipCity, o.ShipState, o.ShipPincode,
             o.CustomerGstin, o.SubTotal, o.Discount, o.CouponCode, o.ShippingFee, o.CodFee, o.Total, o.TaxAmount,
             o.AmountPaid, o.EstimatedCost, actual, bills.Count > 0, o.Total - o.TaxAmount - cost,
@@ -114,7 +119,28 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
             bills.Select(b => new AdminBillRef(b.Id, b.BillNumber, b.BillDate, b.TotalAmount, b.TaxableAmount, b.AmountPaid, b.PaymentStatus, b.FileUrl)).ToList(),
             o.Invoices.OrderByDescending(i => i.Id).Select(i => new AdminInvoiceRef(i.Id, i.InvoiceNumber, i.InvoiceDate, i.Total, i.IsCancelled, i.IsTaxInvoice)).ToList(),
             NextStatuses(o.Status), o.PaymentProvider, o.UpiAmount, o.CustomerUtr,
-            o.OriginalDeliveryDate, o.DeliveryDateReason, o.DeliveryDateChangedAt);
+            o.OriginalDeliveryDate, o.DeliveryDateReason, o.DeliveryDateChangedAt, o.Channel, o.ChannelReference, o.CreatedByStaff,
+            o.ShipLatitude, o.ShipLongitude, OrderService.MapLink(o));
+    }
+
+    // ---------- Manual orders (Instagram, Facebook, WhatsApp, phone, walk-in) ----------
+
+    [HttpGet("customer-lookup")]
+    public Task<List<CustomerLookup>> CustomerLookup(string q) => orders.FindCustomersAsync(q ?? "");
+
+    [HttpPost("manual/quote")]
+    public Task<ManualQuote> ManualQuote(ManualQuoteRequest r) => orders.QuoteManualAsync(r.Items, r.Discount, r.ShippingFee, r.Pincode);
+
+    [HttpPost("manual")]
+    public Task<ManualOrderResult> CreateManual(ManualOrderRequest r) => orders.CreateManualOrderAsync(r, UserName);
+
+    /// <summary>Ready-to-send WhatsApp message for the customer (summary, delivery date, payment and tracking link).</summary>
+    [HttpGet("{id:int}/customer-message")]
+    public async Task<object> CustomerMessage(int id)
+    {
+        var o = await db.Orders.Include(x => x.Items).FirstOrDefaultAsync(x => x.Id == id) ?? throw new AppException("Order not found", 404);
+        var (text, link) = await orders.CustomerMessageAsync(o);
+        return new { text, link, whatsAppUrl = OrderService.WhatsAppLink(o.ShipPhone, text) };
     }
 
     private static List<OrderStatus> NextStatuses(OrderStatus s) => s switch
@@ -176,9 +202,14 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
         db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = id, Status = r.Status, Note = note, VisibleToCustomer = r.VisibleToCustomer, CreatedBy = UserName });
         await db.SaveChangesAsync();
 
-        if (r.Status == OrderStatus.Delivered) await invoices.GenerateAsync(id);
-        if (r.VisibleToCustomer)
-            await email.SendAsync(o.ShipEmail, $"Order {o.OrderNumber}: {Humanize(r.Status)}", $"<p>{note}</p><p>Order: <b>{o.OrderNumber}</b></p>");
+        WoodsyCart.Infrastructure.Email.EmailAttachment? invoicePdf = null;
+        if (r.Status == OrderStatus.Delivered)
+        {
+            await invoices.GenerateAsync(id);
+            var inv = await db.CustomerInvoices.Where(i => i.OrderId == id && !i.IsCancelled).OrderByDescending(i => i.Id).FirstOrDefaultAsync();
+            if (inv is not null) invoicePdf = new(inv.InvoiceNumber.Replace('/', '-') + ".pdf", await invoices.RenderPdfAsync(inv.Id));
+        }
+        if (r.VisibleToCustomer) await orders.NotifyStatusAsync(o, r.Status, note, invoicePdf);
         return await Get(id);
     }
 
@@ -263,6 +294,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
         sb.AppendLine(o.ShipName);
         sb.AppendLine(o.ShipPhone);
         sb.AppendLine(string.Join(", ", new[] { o.ShipLine1, o.ShipLine2, o.ShipLandmark, o.ShipCity, o.ShipPincode }.Where(x => !string.IsNullOrWhiteSpace(x))));
+        if (o.ShipLatitude is not null) sb.AppendLine($"Location: {OrderService.MapLink(o)}");
         sb.AppendLine();
         sb.AppendLine("Please confirm the dispatch date and share your bill. Kindly don't include any price tags in the package. Thank you!");
         var text = sb.ToString();
@@ -280,7 +312,13 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
         o.AmountPaid += r.Amount;
         o.PaymentStatus = o.AmountPaid >= o.Total ? PaymentStatus.Paid : PaymentStatus.PartiallyPaid;
         db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = id, Status = o.Status, Note = $"Payment of ₹{r.Amount:N2} received ({r.Method})", VisibleToCustomer = false, CreatedBy = UserName });
+        if (o.PaymentStatus == PaymentStatus.Paid && o.Status == OrderStatus.Pending)
+        {
+            o.Status = OrderStatus.Confirmed;
+            db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = id, Status = OrderStatus.Confirmed, Note = "Payment received — thank you!", CreatedBy = UserName });
+        }
         await db.SaveChangesAsync();
+        await orders.NotifyPaymentAsync(o, r.Amount, $"recorded by {UserName} ({r.Method}{(string.IsNullOrWhiteSpace(r.Reference) ? "" : $", ref {r.Reference}")})");
         return await Get(id);
     }
 
@@ -290,6 +328,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
         var o = await db.Orders.FindAsync(id) ?? throw new AppException("Order not found", 404);
         db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = id, Status = o.Status, Note = r.Note, VisibleToCustomer = r.VisibleToCustomer, CreatedBy = UserName });
         await db.SaveChangesAsync();
+        if (r.VisibleToCustomer) await orders.NotifyNoteAsync(o, r.Note);
         return await Get(id);
     }
 
@@ -313,7 +352,7 @@ public record RefundRow(int Id, int OrderId, string OrderNumber, string Customer
     string? CustomerComment, string? AdminNotes, string? Reference, DateTime CreatedAt, DateTime? ProcessedAt, PaymentMethod PaymentMethod);
 public record CreateRefund(int OrderId, RefundType Type, decimal Amount, string Reason);
 
-public class RefundsController(AppDbContext db, EmailSender email) : AdminControllerBase
+public class RefundsController(AppDbContext db, OrderService orders) : AdminControllerBase
 {
     [HttpGet]
     public Task<List<RefundRow>> List(RefundStatus? status) => db.Refunds.AsNoTracking()
@@ -342,7 +381,7 @@ public class RefundsController(AppDbContext db, EmailSender email) : AdminContro
             o.PaymentStatus = r.Amount >= o.AmountPaid ? PaymentStatus.Refunded : PaymentStatus.PartiallyRefunded;
             if (refund.Type == RefundType.Return) o.Status = OrderStatus.Returned;
             db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = o.Id, Status = o.Status, Note = $"Refund of ₹{r.Amount:N2} processed.", CreatedBy = UserName });
-            await email.SendAsync(o.ShipEmail, $"Refund processed for {o.OrderNumber}", $"<p>We have processed a refund of ₹{r.Amount:N2}. Reference: {r.Reference}</p>");
+            await orders.NotifyRefundAsync(o, r.Amount, r.Reference);
         }
         else if (r.Status == RefundStatus.Approved && refund.Type == RefundType.Return)
             db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = o.Id, Status = o.Status, Note = "Return approved — pickup will be arranged.", CreatedBy = UserName });

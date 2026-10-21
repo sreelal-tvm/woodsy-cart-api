@@ -44,6 +44,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<PaymentProviderConfig> PaymentProviderConfigs => Set<PaymentProviderConfig>();
     public DbSet<PaymentMethodOption> PaymentMethodOptions => Set<PaymentMethodOption>();
     public DbSet<PaymentAlert> PaymentAlerts => Set<PaymentAlert>();
+    public DbSet<EmailConfig> EmailConfigs => Set<EmailConfig>();
+    public DbSet<EmailLog> EmailLogs => Set<EmailLog>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
     {
@@ -66,6 +68,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.Description).HasMaxLength(4000);
         });
         b.Entity<Collection>().HasIndex(x => x.Slug).IsUnique();
+        b.Entity<EmailConfig>(e => { e.Property(x => x.PasswordProtected).HasMaxLength(2000); e.Property(x => x.AdminEmails).HasMaxLength(1000); e.Property(x => x.EventsJson).HasMaxLength(4000); });
+        b.Entity<EmailLog>(e => e.HasIndex(x => x.CreatedAt));
 
         b.Entity<Product>(e =>
         {
@@ -125,6 +129,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.Comment).HasMaxLength(4000);
             e.HasOne(x => x.Product).WithMany(p => p.Reviews).HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Order).WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.SetNull);
         });
 
         b.Entity<AppUser>(e =>

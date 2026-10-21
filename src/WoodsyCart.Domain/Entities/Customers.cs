@@ -14,6 +14,13 @@ public class AppUser : BaseEntity
     public bool IsGuest { get; set; }
     public DateTime? LastLoginAt { get; set; }
     public string? Notes { get; set; }
+    /// <summary>Forgot password: SHA-256 of the emailed one-time token (the token itself is never stored).</summary>
+    public string? PasswordResetTokenHash { get; set; }
+    public DateTime? PasswordResetExpiresAt { get; set; }
+    public DateTime? PasswordResetRequestedAt { get; set; }
+    /// <summary>When the password was last set, and by whom ("Customer" or the admin's name).</summary>
+    public DateTime? PasswordChangedAt { get; set; }
+    public string? PasswordChangedBy { get; set; }
     public ICollection<Address> Addresses { get; set; } = [];
     public ICollection<Order> Orders { get; set; } = [];
 }
@@ -32,6 +39,9 @@ public class Address : BaseEntity
     public string State { get; set; } = "Karnataka";
     public string Pincode { get; set; } = "";
     public bool IsDefault { get; set; }
+    /// <summary>Exact delivery point picked on the map (optional).</summary>
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
 }
 
 public class CartItem : BaseEntity
@@ -70,6 +80,8 @@ public class ServiceablePincode : BaseEntity
     public string City { get; set; } = "Bengaluru";
     public string? Area { get; set; }
     public int DeliveryDays { get; set; } = 7;
+    /// <summary>Latest day shown to customers ("8–10 days"). Empty = DeliveryDays + 3.</summary>
+    public int? DeliveryDaysMax { get; set; }
     public decimal ExtraCharge { get; set; }
     public bool CodAvailable { get; set; } = true;
     public bool IsActive { get; set; } = true;

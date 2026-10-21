@@ -14,7 +14,7 @@ public record ActionItemsDto(int OrdersToConfirm, int OrdersToPlaceWithVendor, i
     decimal UnpaidVendorAmount, int PriceChangedProducts, int UnavailableActiveProducts, int NewEnquiries, int PendingReviews, int DeliveredWithoutInvoice, int CodToCollect);
 public record DashboardDto(KpiDto Kpis, List<SeriesPoint> SalesSeries, List<NameValue> StatusBreakdown, List<NameValue> TopProducts,
     List<NameValue> SalesByCategory, List<NameValue> TopAreas, List<NameValue> PaymentMethods, List<RecentOrderDto> RecentOrders,
-    ActionItemsDto Actions, int ActiveProducts, int TotalCustomers, List<DashboardOfferDto>? Offers = null);
+    ActionItemsDto Actions, int ActiveProducts, int TotalCustomers, List<DashboardOfferDto>? Offers = null, List<NameValue>? Channels = null);
 
 /// <summary>An offer on the dashboard: running, coming up, or ended in the last 30 days.</summary>
 public record DashboardOfferDto(int Id, string Name, string Slug, string ThemeColor, string Status, DateTime StartsAt, DateTime EndsAt,
@@ -22,7 +22,8 @@ public record DashboardOfferDto(int Id, string Name, string Slug, string ThemeCo
 
 public record PnlLine(string Label, decimal Amount, string? Note = null);
 public record PnlMonth(string Month, decimal Revenue, decimal Cogs, decimal Expenses, decimal NetProfit);
-public record OrderProfitDto(int OrderId, string OrderNumber, DateTime Date, string Customer, decimal Revenue, decimal Cost, bool CostIsEstimated, decimal Profit, decimal MarginPercent);
+public record OrderProfitDto(int OrderId, string OrderNumber, DateTime Date, string Customer, decimal Revenue, decimal Cost, bool CostIsEstimated, decimal Profit, decimal MarginPercent,
+    SalesChannel Channel = SalesChannel.Website);
 public record ProfitLossDto(
     DateTime From, DateTime To, bool GstRegistered,
     decimal GrossSales, decimal OutputGst, decimal Refunds, decimal NetRevenue,
@@ -92,6 +93,8 @@ public class ReportService(AppDbContext db)
             .OrderByDescending(x => x.Sum).Take(8).ToListAsync()).ToList();
         var pinNames = await db.ServiceablePincodes.AsNoTracking().Where(p => areas.Select(a => a.Key).Contains(p.Pincode)).ToDictionaryAsync(p => p.Pincode, p => p.Area);
         var topAreas = areas.Select(a => new NameValue(pinNames.GetValueOrDefault(a.Key) is { } n ? $"{n} ({a.Key})" : a.Key, a.Sum, a.Count)).ToList();
+        var channels = (await ok.GroupBy(o => o.Channel).Select(g => new { g.Key, Sum = g.Sum(o => o.Total), Count = g.Count() }).ToListAsync())
+            .OrderByDescending(x => x.Sum).Select(x => new NameValue(x.Key.ToString(), x.Sum, x.Count)).ToList();
         var methods = (await ok.GroupBy(o => o.PaymentMethod).Select(g => new { g.Key, Sum = g.Sum(o => o.Total), Count = g.Count() }).ToListAsync())
             .Select(x => new NameValue(x.Key.ToString(), x.Sum, x.Count)).ToList();
 
@@ -129,7 +132,7 @@ public class ReportService(AppDbContext db)
             series, status, topProducts, byCategory, topAreas, methods, recent, actions,
             await db.Products.CountAsync(p => p.IsActive && p.IsAvailable),
             await db.Users.CountAsync(u => u.Role == UserRole.Customer),
-            offers);
+            offers, channels);
     }
 
     /// <summary>
@@ -146,7 +149,7 @@ public class ReportService(AppDbContext db)
             .Where(o => (o.Status == OrderStatus.Delivered || o.Status == OrderStatus.Returned) && o.DeliveredAt >= from && o.DeliveredAt < to)
             .Select(o => new
             {
-                o.Id, o.OrderNumber, o.ShipName, o.DeliveredAt, o.Total, o.TaxAmount, o.EstimatedCost, o.Status, o.OfferDiscount, o.Discount,
+                o.Id, o.OrderNumber, o.ShipName, o.DeliveredAt, o.Total, o.TaxAmount, o.EstimatedCost, o.Status, o.OfferDiscount, o.Discount, o.Channel,
                 CostExGst = o.Items.Sum(i => i.UnitVendorCost * i.Quantity * 100 / (100 + i.GstRate))
             })
             .ToListAsync();
@@ -166,7 +169,7 @@ public class ReportService(AppDbContext db)
             var cost = hasBill ? billed : Money.R2(gst ? o.CostExGst : o.EstimatedCost);
             var profit = revenue - cost;
             return new OrderProfitDto(o.Id, o.OrderNumber, o.DeliveredAt!.Value, o.ShipName, revenue, cost, !hasBill, profit,
-                revenue == 0 ? 0 : Money.R2(profit / revenue * 100));
+                revenue == 0 ? 0 : Money.R2(profit / revenue * 100), o.Channel);
         }).OrderByDescending(o => o.Date).ToList();
 
         var grossSales = delivered.Sum(o => o.Total);

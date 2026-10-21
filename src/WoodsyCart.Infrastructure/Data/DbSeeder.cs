@@ -21,7 +21,7 @@ public class DbSeeder(AppDbContext db, AuthService auth, IConfiguration config, 
                 Tagline = "Factory-direct furniture, delivered across Bengaluru",
                 AddressLine1 = "Bengaluru",
                 City = "Bengaluru", State = "Karnataka", StateCode = "29", Pincode = "560001",
-                Email = "support@woodsycart.in",
+                Email = "support@woodsycart.com",
                 InvoicePrefix = "WC",
                 DefaultCommissionPercent = 15,
                 PriceRounding = PriceRounding.EndWith99,
@@ -33,7 +33,7 @@ public class DbSeeder(AppDbContext db, AuthService auth, IConfiguration config, 
             });
         }
 
-        var adminEmail = config["Seed:AdminEmail"] ?? "admin@woodsycart.in";
+        var adminEmail = config["Seed:AdminEmail"] ?? "admin@woodsycart.com";
         if (!await db.Users.AnyAsync(u => u.Role == UserRole.Admin))
         {
             var password = config["Seed:AdminPassword"];

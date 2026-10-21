@@ -72,12 +72,16 @@ public record ReviewDto(int Id, string UserName, int Rating, string? Title, stri
 
 public record CreateReviewRequest(int Rating, string? Title, string? Comment);
 
+/// <summary>Product page: can this customer review the product? Only buyers whose order was delivered can.</summary>
+public record MyReviewStatusDto(bool CanReview, string? OrderNumber, bool Reviewed);
+
 public record PublicSettingsDto(
     string BusinessName, string? Tagline, string Phone, string? WhatsApp, string Email,
     string Address, decimal ShippingFee, decimal FreeShippingThreshold,
     bool CodEnabled, decimal CodFee, decimal CodMaxOrderAmount, bool OnlinePaymentEnabled, string? RazorpayKeyId,
-    string? InstagramUrl, string? FacebookUrl, string? YoutubeUrl, int DefaultDeliveryDays);
+    string? InstagramUrl, string? FacebookUrl, string? YoutubeUrl, int DefaultDeliveryDays, string? MapsApiKey = null);
 
-public record PincodeCheckDto(string Pincode, bool Serviceable, int DeliveryDays, decimal ExtraCharge, bool CodAvailable, string? Area, string Message);
+/// <summary>NearBengaluru: not on the delivery list, but the pinned spot is close enough that the customer should ask us on WhatsApp.</summary>
+public record PincodeCheckDto(string Pincode, bool Serviceable, int DeliveryDays, decimal ExtraCharge, bool CodAvailable, string? Area, string Message, bool NearBengaluru = false);
 
 public record EnquiryRequest(string Name, string? Email, string Phone, string? Subject, string Message, int? ProductId);

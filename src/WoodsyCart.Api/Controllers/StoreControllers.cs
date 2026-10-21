@@ -21,6 +21,17 @@ public class AuthController(AuthService auth, AppDbContext db) : ApiControllerBa
     [HttpPost("login")]
     public Task<AuthResponse> Login(LoginRequest req) => auth.LoginAsync(req, adminOnly: false);
 
+    /// <summary>Always answers the same way, so it can't be used to find out who has an account.</summary>
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest req)
+    {
+        await auth.ForgotPasswordAsync(req);
+        return Ok(new { message = $"If an account exists for this email, we've sent a link to reset the password. It expires in {AuthService.ResetLinkMinutes} minutes." });
+    }
+
+    [HttpPost("reset-password")]
+    public Task<AuthResponse> ResetPassword(ResetPasswordRequest req) => auth.ResetPasswordAsync(req);
+
     [HttpPost("admin/login")]
     public Task<AuthResponse> AdminLogin(LoginRequest req) => auth.LoginAsync(req, adminOnly: true);
 
@@ -77,6 +88,9 @@ public class CatalogController(CatalogService catalog) : ApiControllerBase
     [HttpGet("products/{id:int}/reviews")]
     public Task<PagedResult<ReviewDto>> Reviews(int id, int page = 1) => catalog.GetReviewsAsync(id, Math.Max(1, page));
 
+    [Authorize, HttpGet("products/{id:int}/my-review")]
+    public Task<MyReviewStatusDto> MyReview(int id) => catalog.GetMyReviewStatusAsync(id, UserId);
+
     [Authorize, HttpPost("products/{id:int}/reviews")]
     public async Task<IActionResult> AddReview(int id, CreateReviewRequest req)
     {
@@ -103,24 +117,37 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
         return new PublicSettingsDto(s.BusinessName, s.Tagline, s.Phone, s.WhatsApp, s.Email, address,
             s.ShippingFee, s.FreeShippingThreshold, s.CodEnabled, s.CodFee, s.CodMaxOrderAmount,
             online, online ? rzp.KeyId : null,
-            s.InstagramUrl, s.FacebookUrl, s.YoutubeUrl, s.DefaultDeliveryDays);
+            s.InstagramUrl, s.FacebookUrl, s.YoutubeUrl, s.DefaultDeliveryDays,
+            s.MapsEnabled && !string.IsNullOrWhiteSpace(s.GoogleMapsApiKey) ? s.GoogleMapsApiKey : null);
     }
 
     [HttpGet("pincode/{pincode}")]
-    public Task<PincodeCheckDto> Pincode(string pincode) => orders.CheckPincodeAsync(pincode);
+    public Task<PincodeCheckDto> Pincode(string pincode, double? lat, double? lng) => orders.CheckPincodeAsync(pincode, lat, lng);
 
     [HttpPost("enquiry")]
     public async Task<IActionResult> Enquiry(EnquiryRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Phone) || string.IsNullOrWhiteSpace(req.Message))
             throw new AppException("Name, phone and message are required.");
-        db.Enquiries.Add(new Enquiry
+        var enquiry = new Enquiry
         {
             Name = req.Name.Trim(), Email = req.Email?.Trim(), Phone = Mobile.Normalise(req.Phone),
             Subject = req.Subject?.Trim(), Message = req.Message.Trim(), ProductId = req.ProductId
-        });
+        };
+        db.Enquiries.Add(enquiry);
         await db.SaveChangesAsync();
-        await email.SendAsync(email.AdminEmail, $"New enquiry from {req.Name}", $"<p>{req.Phone} {req.Email}</p><p>{req.Message}</p>");
+        var product = req.ProductId is null ? null : await db.Products.AsNoTracking().Where(p => p.Id == req.ProductId).Select(p => p.Name).FirstOrDefaultAsync();
+        var E = (Func<string?, string>)WoodsyCart.Infrastructure.Email.EmailTemplates.E;
+        await email.AdminsAsync(WoodsyCart.Infrastructure.Email.EmailEvent.AdminNewEnquiry, $"New enquiry from {enquiry.Name}{(product is null ? "" : " — " + product)}",
+            "New enquiry",
+            $"<p><b>{E(enquiry.Name)}</b> · {E(enquiry.Phone)}{(enquiry.Email is null ? "" : " · " + E(enquiry.Email))}</p>" +
+            (product is null ? "" : $"<p>About: <b>{E(product)}</b></p>") + (enquiry.Subject is null ? "" : $"<p>Subject: {E(enquiry.Subject)}</p>") +
+            WoodsyCart.Infrastructure.Email.EmailTemplates.Info(E(enquiry.Message).Replace("\n", "<br/>")),
+            ("Reply on WhatsApp", $"https://wa.me/91{enquiry.Phone}"));
+        await email.CustomerAsync(WoodsyCart.Infrastructure.Email.EmailEvent.EnquiryReceived, enquiry.Email, "We've received your message", "Thanks for getting in touch!",
+            $"<p>Hi {E(enquiry.Name.Split(' ')[0])}, we've received your message{(product is null ? "" : $" about <b>{E(product)}</b>")} and will get back to you shortly — usually the same day.</p>" +
+            WoodsyCart.Infrastructure.Email.EmailTemplates.Info(E(enquiry.Message).Replace("\n", "<br/>")),
+            ("Browse furniture", email.StorefrontUrl + "/shop"));
         return Ok(new { message = "Thanks! We'll get back to you shortly." });
     }
 }
@@ -132,7 +159,7 @@ public class AccountController(AppDbContext db) : ApiControllerBase
     [HttpGet("addresses")]
     public Task<List<AddressDto>> Addresses() => db.Addresses.AsNoTracking().Where(a => a.UserId == UserId)
         .OrderByDescending(a => a.IsDefault).ThenByDescending(a => a.Id)
-        .Select(a => new AddressDto(a.Id, a.Label, a.FullName, a.Phone, a.Line1, a.Line2, a.Landmark, a.City, a.State, a.Pincode, a.IsDefault))
+        .Select(a => new AddressDto(a.Id, a.Label, a.FullName, a.Phone, a.Line1, a.Line2, a.Landmark, a.City, a.State, a.Pincode, a.IsDefault, a.Latitude, a.Longitude))
         .ToListAsync();
 
     [HttpPost("addresses")]
@@ -143,7 +170,7 @@ public class AccountController(AppDbContext db) : ApiControllerBase
         if (a.IsDefault) await ClearDefault();
         db.Addresses.Add(a);
         await db.SaveChangesAsync();
-        return new AddressDto(a.Id, a.Label, a.FullName, a.Phone, a.Line1, a.Line2, a.Landmark, a.City, a.State, a.Pincode, a.IsDefault);
+        return new AddressDto(a.Id, a.Label, a.FullName, a.Phone, a.Line1, a.Line2, a.Landmark, a.City, a.State, a.Pincode, a.IsDefault, a.Latitude, a.Longitude);
     }
 
     [HttpPut("addresses/{id:int}")]
@@ -270,6 +297,11 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
         await orders.RequestReturnAsync(Access(token), orderNumber, req);
         return NoContent();
     }
+
+    /// <summary>Rate / review a delivered item: signed-in owner, the order's access token, or the delivery phone (tracking page).</summary>
+    [HttpPost("{orderNumber}/reviews")]
+    public Task<List<OrderReviewDto>> Review(string orderNumber, OrderReviewRequest req, string? token, string? phone) =>
+        orders.ReviewItemAsync(Access(token), phone, orderNumber.Trim().ToUpper(), req);
 
     [HttpGet("{orderNumber}/invoice")]
     public async Task<IActionResult> Invoice(string orderNumber, string? token)

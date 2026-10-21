@@ -24,6 +24,11 @@ builder.Services.AddDataProtection()
     .SetApplicationName("WoodsyCart")
     .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys")));
 
+// robots.txt, sitemap.xml and link previews (served by SeoController, or written as files for IIS / Plesk)
+builder.Services.AddScoped<WoodsyCart.Api.Seo.SeoBuilder>();
+builder.Services.Configure<WoodsyCart.Api.Seo.SeoOptions>(builder.Configuration.GetSection("Seo"));
+builder.Services.AddHostedService<WoodsyCart.Api.Seo.SeoFilesWriter>();
+
 builder.Services.AddControllers().AddJsonOptions(o =>
 {
     o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
@@ -100,5 +105,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapGet("/", () => Results.Redirect("/swagger"));
+// The API's own address: keep crawlers out of the JSON endpoints but let them see product photos.
+app.MapGet("/robots.txt", () => Results.Text("User-agent: *\nDisallow: /api/\nAllow: /media/\n", "text/plain"));
 
 app.Run();

@@ -279,8 +279,8 @@ public class ReportsController(ReportService reports) : AdminControllerBase
         sb.AppendLine($"Total expenses,{p.TotalExpenses}");
         sb.AppendLine($"Net profit,{p.NetProfit}");
         sb.AppendLine();
-        sb.AppendLine("Order,Delivered,Customer,Revenue (ex GST),Cost,Cost estimated,Profit,Margin %");
-        foreach (var o in p.Orders) sb.AppendLine($"{o.OrderNumber},{o.Date:dd-MM-yyyy},\"{o.Customer}\",{o.Revenue},{o.Cost},{o.CostIsEstimated},{o.Profit},{o.MarginPercent}");
+        sb.AppendLine("Order,Channel,Delivered,Customer,Revenue (ex GST),Cost,Cost estimated,Profit,Margin %");
+        foreach (var o in p.Orders) sb.AppendLine($"{o.OrderNumber},{o.Channel},{o.Date:dd-MM-yyyy},\"{o.Customer}\",{o.Revenue},{o.Cost},{o.CostIsEstimated},{o.Profit},{o.MarginPercent}");
         return File(Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", "profit-loss.csv");
     }
 }
@@ -323,7 +323,7 @@ public class ReviewsController(AppDbContext db) : AdminControllerBase
     [HttpGet]
     public async Task<object> List(bool? approved) => await db.Reviews.AsNoTracking()
         .Where(r => approved == null || r.IsApproved == approved).OrderByDescending(r => r.CreatedAt).Take(200)
-        .Select(r => new { r.Id, r.ProductId, Product = r.Product!.Name, ProductSlug = r.Product.Slug, Customer = r.User!.FullName, r.Rating, r.Title, r.Comment, r.IsApproved, r.IsVerifiedPurchase, r.CreatedAt })
+        .Select(r => new { r.Id, r.ProductId, Product = r.Product!.Name, ProductSlug = r.Product.Slug, Customer = r.User!.FullName, r.OrderId, OrderNumber = r.Order != null ? r.Order.OrderNumber : null, r.Rating, r.Title, r.Comment, r.IsApproved, r.IsVerifiedPurchase, r.CreatedAt })
         .ToListAsync();
 
     [HttpPost("{id:int}/approve")]
@@ -378,7 +378,7 @@ public class BannersController(AppDbContext db) : AdminControllerBase
     }
 }
 
-public record BulkPincodes(string Pincodes, int DeliveryDays, decimal ExtraCharge, bool CodAvailable);
+public record BulkPincodes(string Pincodes, int DeliveryDays, decimal ExtraCharge, bool CodAvailable, int? DeliveryDaysMax = null);
 
 public class PincodesController(AppDbContext db) : AdminControllerBase
 {
@@ -395,7 +395,7 @@ public class PincodesController(AppDbContext db) : AdminControllerBase
         {
             var e = existing.FirstOrDefault(x => x.Pincode == pin);
             if (e is null) { e = new ServiceablePincode { Pincode = pin }; db.ServiceablePincodes.Add(e); }
-            e.DeliveryDays = r.DeliveryDays; e.ExtraCharge = r.ExtraCharge; e.CodAvailable = r.CodAvailable; e.IsActive = true;
+            e.DeliveryDays = r.DeliveryDays; e.DeliveryDaysMax = MaxDays(r.DeliveryDays, r.DeliveryDaysMax); e.ExtraCharge = r.ExtraCharge; e.CodAvailable = r.CodAvailable; e.IsActive = true;
         }
         await db.SaveChangesAsync();
         return new { saved = pins.Count };
@@ -405,10 +405,14 @@ public class PincodesController(AppDbContext db) : AdminControllerBase
     public async Task<IActionResult> Update(int id, ServiceablePincode r)
     {
         var p = await db.ServiceablePincodes.FindAsync(id) ?? throw new AppException("Pincode not found", 404);
-        p.Area = r.Area; p.City = r.City; p.DeliveryDays = r.DeliveryDays; p.ExtraCharge = r.ExtraCharge; p.CodAvailable = r.CodAvailable; p.IsActive = r.IsActive;
+        p.Area = r.Area; p.City = r.City; p.DeliveryDays = r.DeliveryDays; p.DeliveryDaysMax = MaxDays(r.DeliveryDays, r.DeliveryDaysMax);
+        p.ExtraCharge = r.ExtraCharge; p.CodAvailable = r.CodAvailable; p.IsActive = r.IsActive;
         await db.SaveChangesAsync();
         return NoContent();
     }
+
+    /// <summary>"Up to" days must not be before "from" days; empty means from + 3.</summary>
+    private static int? MaxDays(int from, int? max) => max is > 0 ? Math.Max(max.Value, from) : null;
 
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
@@ -446,6 +450,8 @@ public class SettingsController(AppDbContext db, PricingService pricing) : Admin
     {
         var s = await db.BusinessSettings.FirstAsync();
         if (r.DefaultGstRate is < 0 or > 28) throw new AppException("GST % must be between 0 and 28.");
+        r.GoogleMapsApiKey = string.IsNullOrWhiteSpace(r.GoogleMapsApiKey) ? null : r.GoogleMapsApiKey.Trim();
+        if (r.MapsEnabled && r.GoogleMapsApiKey is null) throw new AppException("Paste your Google Maps API key before switching maps on.");
         var repriced = s.DefaultCommissionPercent != r.DefaultCommissionPercent || s.PriceRounding != r.PriceRounding
                        || s.VendorPricesIncludeGst != r.VendorPricesIncludeGst;
         var id = s.Id; var created = s.CreatedAt;
