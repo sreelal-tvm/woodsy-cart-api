@@ -56,7 +56,7 @@ public class EmailSender(EmailQueue queue, EmailSettingsService settings, IOptio
         if (s.Server is null) return (EmailLogStatus.Skipped, "Save the mail server settings and switch email on first.");
         var html = EmailTemplates.Layout("Your email is working 🎉",
             "<p>This is a test email from <b>WoodsyCart Admin</b>. If you can read this, order and payment emails will reach your customers and your team.</p>" +
-            $"<p style=\"color:#6b7280;font-size:13px\">Sent through {WebUtility.HtmlEncode(s.Server.Host)}:{s.Server.Port} as {WebUtility.HtmlEncode(s.Server.FromEmail)}.</p>", null);
+            $"<p style=\"color:#6B5A4E;font-size:13px\">Sent through {WebUtility.HtmlEncode(s.Server.Host)}:{s.Server.Port} as {WebUtility.HtmlEncode(s.Server.FromEmail)}.</p>", null);
         return await EmailWorker.SendAsync(s.Server, new EmailMessage(EmailEvent.Test, [to], "WoodsyCart test email", html));
     }
 

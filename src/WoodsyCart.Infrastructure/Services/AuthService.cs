@@ -133,7 +133,7 @@ public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, Email
             await mailer.CustomerAsync(Email.EmailEvent.PasswordChanged, u.Email, "Your WoodsyCart password was changed", "Password changed",
                 $"<p>Hi {Email.EmailTemplates.E(u.FullName.Split(' ')[0])},</p><p>As you asked, our team has set a new password for your WoodsyCart account " +
                 $"(<b>{Email.EmailTemplates.E(u.Email)}</b>). We'll share it with you directly — please change it after you sign in (Account → Profile).</p>" +
-                "<p style=\"color:#6b7280;font-size:13px\">Didn't ask for this? Reply to this email or message us on WhatsApp straight away.</p>",
+                "<p style=\"color:#6B5A4E;font-size:13px\">Didn't ask for this? Reply to this email or message us on WhatsApp straight away.</p>",
                 ("Sign in", mailer.StorefrontUrl + "/login"));
         return await PasswordStatusAsync(userId);
     }
@@ -169,7 +169,7 @@ public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, Email
             $"<p>Hi {first},</p><p>We received a request to {(user.IsGuest ? "set a password for" : "reset the password of")} your WoodsyCart account " +
             $"(<b>{Email.EmailTemplates.E(user.Email)}</b>). Tap the button below to choose a new password.</p>" +
             Email.EmailTemplates.Info($"This link works once and expires in <b>{ResetLinkMinutes} minutes</b>.") +
-            "<p style=\"color:#6b7280;font-size:13px\">Didn't ask for this? You can ignore this email — your password stays the same.</p>",
+            "<p style=\"color:#6B5A4E;font-size:13px\">Didn't ask for this? You can ignore this email — your password stays the same.</p>",
             (user.IsGuest ? "Set my password" : "Reset my password", link));
     }
 
@@ -196,7 +196,7 @@ public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, Email
 
         await mailer.CustomerAsync(Email.EmailEvent.PasswordChanged, user.Email, "Your WoodsyCart password was changed", "Password changed",
             $"<p>Hi {Email.EmailTemplates.E(user.FullName.Split(' ')[0])},</p><p>The password for your WoodsyCart account was just changed.</p>" +
-            "<p style=\"color:#6b7280;font-size:13px\">If this wasn't you, reply to this email or message us on WhatsApp straight away.</p>",
+            "<p style=\"color:#6B5A4E;font-size:13px\">If this wasn't you, reply to this email or message us on WhatsApp straight away.</p>",
             ("Go to my account", mailer.StorefrontUrl + "/account"));
         return Issue(user);
     }

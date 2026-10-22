@@ -291,7 +291,7 @@ public class InvoiceService(AppDbContext db, FileStorage storage)
             if (logo is not null) r.ConstantItem(60).Height(50).Image(logo).FitArea();
             r.RelativeItem().PaddingLeft(logo is null ? 0 : 8).Column(c =>
             {
-                c.Item().Text(s.LegalName ?? s.BusinessName).Bold().FontSize(16).FontColor("#3874ff");
+                c.Item().Text(s.LegalName ?? s.BusinessName).Bold().FontSize(16).FontColor("#9A5226");
                 c.Item().Text(string.Join(", ", new[] { s.AddressLine1, s.AddressLine2, s.City, $"{s.State} - {s.Pincode}" }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase)));
                 c.Item().Text(string.Join("   ", new[] { string.IsNullOrWhiteSpace(s.Phone) ? null : $"Phone: {s.Phone}", $"Email: {s.Email}", s.Website }.Where(x => !string.IsNullOrWhiteSpace(x))));
                 if (s.GstRegistered && !string.IsNullOrEmpty(s.Gstin)) c.Item().Text($"GSTIN: {s.Gstin}   State code: {s.StateCode}").SemiBold();

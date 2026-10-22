@@ -31,7 +31,7 @@ public class Collection : BaseEntity
 public class Tag : BaseEntity
 {
     public string Name { get; set; } = "";
-    public string Color { get; set; } = "#3874ff";
+    public string Color { get; set; } = "#B8683A";
     public long? VendorTagId { get; set; }
     public ICollection<Product> Products { get; set; } = [];
 }

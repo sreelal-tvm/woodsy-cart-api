@@ -116,7 +116,7 @@ public class SeoBuilder(AppDbContext db, CatalogService catalog, IOptions<SmtpOp
             description = o.Tagline ?? o.Description ?? description;
             image = o.BannerImageUrl is null ? null : Absolute(o.BannerImageUrl);
         }
-        image ??= Site + "/icons/icon-512x512.png";
+        image ??= Site + "/og-image.png";
         description = description.Length > 200 ? description[..199].TrimEnd() + "…" : description;
 
         var e = (string s) => System.Net.WebUtility.HtmlEncode(s);

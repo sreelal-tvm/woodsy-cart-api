@@ -72,7 +72,7 @@ public partial class OrderService
         if (status == OrderStatus.Delivered)
             body += (invoice is null ? "" : "<p>Your invoice is attached.</p>") +
                     "<p>How do you like it? <b>Rate your purchase</b> — it takes a minute and helps other families choose.</p>" +
-                    $"<p style=\"color:#6b7280\">Returns are accepted within {ReturnWindowDays} days of delivery from your order page.</p>";
+                    $"<p style=\"color:#6B5A4E\">Returns are accepted within {ReturnWindowDays} days of delivery from your order page.</p>";
         var button = status == OrderStatus.Delivered ? ("★ Rate & review your purchase", email.OrderLink(o) + "#review") : ("View your order", email.OrderLink(o));
         await email.CustomerAsync(ev, o.ShipEmail, subject, heading, body, button, invoice, o.Id);
     }
@@ -87,7 +87,7 @@ public partial class OrderService
         var when = date.ToString("dddd, d MMMM");
         var body = later && old is not null
             ? $"<p>Hi {FirstName(o)},</p><p>We're sorry — the delivery of your order <b>{o.OrderNumber}</b> will be a little later than planned.</p>" +
-              Info($"New expected delivery: <b>{when}</b><br/><span style=\"color:#6b7280\">Was {old:dddd, d MMMM}</span>", "#fff7ed", "#f97316") +
+              Info($"New expected delivery: <b>{when}</b><br/><span style=\"color:#6B5A4E\">Was {old:dddd, d MMMM}</span>", "#fff7ed", "#f97316") +
               (reason is null ? "" : $"<p><b>Reason:</b> {E(reason)}</p>") + "<p>Thank you for your patience. Reply to this email or WhatsApp us if you have any questions.</p>"
             : $"<p>Hi {FirstName(o)},</p><p>Your order <b>{o.OrderNumber}</b> is now expected on <b>{when}</b>.</p>" + (reason is null ? "" : $"<p>{E(reason)}</p>");
         return email.CustomerAsync(EmailEvent.DeliveryDateChanged, o.ShipEmail,
