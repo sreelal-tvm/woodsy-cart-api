@@ -141,6 +141,8 @@ dotnet publish src\WoodsyCart.Api -c Release -r win-x64 --self-contained true -o
 
 The publish folder never contains your local secrets, photos or keys; the project file excludes them.
 
+**If you also run the API locally:** publishing for `win-x64` rebuilds the shared build files, and a local API that's still running can then fail with *"Something went wrong"* (log: *Could not load file or assembly 'Microsoft.IdentityModel.Abstractions'*). Stop the local API before publishing. Afterwards run `dotnet build` once before starting it again.
+
 ---
 
 ## 6. Upload the API (`api.woodsycart.com`)
