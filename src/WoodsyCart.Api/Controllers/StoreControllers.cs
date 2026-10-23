@@ -35,6 +35,17 @@ public class AuthController(AuthService auth, AppDbContext db) : ApiControllerBa
     [HttpPost("admin/login")]
     public Task<AuthResponse> AdminLogin(LoginRequest req) => auth.LoginAsync(req, adminOnly: true);
 
+    /// <summary>Staff only; the link opens the admin app. Answers the same way whether or not the account exists.</summary>
+    [HttpPost("admin/forgot-password")]
+    public async Task<IActionResult> AdminForgotPassword(ForgotPasswordRequest req)
+    {
+        await auth.ForgotPasswordAsync(req, admin: true);
+        return Ok(new { message = $"If a staff account exists for this email, we've sent a link to reset the password. It expires in {AuthService.ResetLinkMinutes} minutes." });
+    }
+
+    [HttpPost("admin/reset-password")]
+    public Task<AuthResponse> AdminResetPassword(ResetPasswordRequest req) => auth.ResetPasswordAsync(req, admin: true);
+
     [Authorize, HttpGet("me")]
     public async Task<UserDto> Me() => AuthService.ToDto(await db.Users.FindAsync(UserId) ?? throw new AppException("Not found", 404));
 

@@ -143,18 +143,20 @@ public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, Email
     /// <summary>
     /// Emails a one-time reset link (valid <see cref="ResetLinkMinutes"/> minutes). Says nothing about whether the email is
     /// registered, and sends at most one link every 2 minutes per account. Guest-checkout customers can use it to set a password.
+    /// With <paramref name="admin"/> only staff accounts get a link, and it opens the admin app.
     /// </summary>
-    public async Task ForgotPasswordAsync(ForgotPasswordRequest req)
+    public async Task ForgotPasswordAsync(ForgotPasswordRequest req, bool admin = false)
     {
         var email = (req.Email ?? "").Trim().ToLowerInvariant();
         if (!email.Contains('@')) throw new AppException("Enter the email address you use with WoodsyCart.");
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
         if (user is null || !user.IsActive || OrderService.IsPlaceholderEmail(user.Email)) return;
+        if (admin && user.Role == UserRole.Customer) return;
         if (user.PasswordResetRequestedAt > DateTime.UtcNow.AddMinutes(-2)) return;
-        await SendResetLinkAsync(user);
+        await SendResetLinkAsync(user, admin);
     }
 
-    private async Task SendResetLinkAsync(AppUser user)
+    private async Task SendResetLinkAsync(AppUser user, bool admin = false)
     {
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         user.PasswordResetTokenHash = Sha256(token);
@@ -162,24 +164,24 @@ public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, Email
         user.PasswordResetRequestedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
 
-        var link = $"{mailer.StorefrontUrl}/reset-password?email={Uri.EscapeDataString(user.Email)}&token={token}";
+        var link = $"{(admin ? mailer.AdminUrl : mailer.StorefrontUrl)}/reset-password?email={Uri.EscapeDataString(user.Email)}&token={token}";
         var first = Email.EmailTemplates.E(user.FullName.Split(' ')[0]);
         await mailer.CustomerAsync(Email.EmailEvent.PasswordReset, user.Email, "Reset your WoodsyCart password",
             user.IsGuest ? "Set a password for your account" : "Reset your password",
-            $"<p>Hi {first},</p><p>We received a request to {(user.IsGuest ? "set a password for" : "reset the password of")} your WoodsyCart account " +
+            $"<p>Hi {first},</p><p>We received a request to {(user.IsGuest ? "set a password for" : "reset the password of")} your WoodsyCart {(admin ? "admin " : "")}account " +
             $"(<b>{Email.EmailTemplates.E(user.Email)}</b>). Tap the button below to choose a new password.</p>" +
             Email.EmailTemplates.Info($"This link works once and expires in <b>{ResetLinkMinutes} minutes</b>.") +
             "<p style=\"color:#6B5A4E;font-size:13px\">Didn't ask for this? You can ignore this email — your password stays the same.</p>",
             (user.IsGuest ? "Set my password" : "Reset my password", link));
     }
 
-    /// <summary>Checks the emailed token, sets the new password and signs the customer in.</summary>
-    public async Task<AuthResponse> ResetPasswordAsync(ResetPasswordRequest req)
+    /// <summary>Checks the emailed token, sets the new password and signs the user in. With <paramref name="admin"/> only staff accounts are accepted.</summary>
+    public async Task<AuthResponse> ResetPasswordAsync(ResetPasswordRequest req, bool admin = false)
     {
         const string invalid = "This reset link is invalid or has expired. Please request a new one.";
         var email = (req.Email ?? "").Trim().ToLowerInvariant();
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
-        if (user is null || !user.IsActive || string.IsNullOrWhiteSpace(req.Token) || user.PasswordResetTokenHash is null ||
+        if (user is null || !user.IsActive || (admin && user.Role == UserRole.Customer) || string.IsNullOrWhiteSpace(req.Token) || user.PasswordResetTokenHash is null ||
             user.PasswordResetExpiresAt is null || user.PasswordResetExpiresAt < DateTime.UtcNow ||
             !CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(user.PasswordResetTokenHash), Encoding.ASCII.GetBytes(Sha256(req.Token.Trim()))))
             throw new AppException(invalid);
@@ -191,13 +193,13 @@ public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, Email
         user.IsGuest = false; // a guest-checkout customer now has a full account with their past orders
         user.LastLoginAt = DateTime.UtcNow;
         user.PasswordChangedAt = DateTime.UtcNow;
-        user.PasswordChangedBy = "Customer";
+        user.PasswordChangedBy = admin ? "Self (reset link)" : "Customer";
         await db.SaveChangesAsync();
 
         await mailer.CustomerAsync(Email.EmailEvent.PasswordChanged, user.Email, "Your WoodsyCart password was changed", "Password changed",
             $"<p>Hi {Email.EmailTemplates.E(user.FullName.Split(' ')[0])},</p><p>The password for your WoodsyCart account was just changed.</p>" +
             "<p style=\"color:#6B5A4E;font-size:13px\">If this wasn't you, reply to this email or message us on WhatsApp straight away.</p>",
-            ("Go to my account", mailer.StorefrontUrl + "/account"));
+            admin ? ("Open the admin console", mailer.AdminUrl + "/dashboard") : ("Go to my account", mailer.StorefrontUrl + "/account"));
         return Issue(user);
     }
 
