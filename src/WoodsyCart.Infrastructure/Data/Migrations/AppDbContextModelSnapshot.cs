@@ -1257,6 +1257,10 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<DateTime?>("ExpectedDeliveryDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("GatewayReference")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<decimal>("OfferDiscount")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -1367,6 +1371,8 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedAt");
+
+                    b.HasIndex("GatewayReference");
 
                     b.HasIndex("OrderNumber")
                         .IsUnique();

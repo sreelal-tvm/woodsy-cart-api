@@ -18,7 +18,7 @@ public static class PaymentProviders
     public static readonly string[] Gateways = [Razorpay, PhonePe, Cashfree, PayU, PaytmPg];
 
     /// <summary>Providers whose checkout flow is implemented in the app (others can be configured but not used yet).</summary>
-    public static readonly string[] Implemented = [DirectUpi, BankTransfer, CashOnDelivery, Razorpay];
+    public static readonly string[] Implemented = [DirectUpi, BankTransfer, CashOnDelivery, Razorpay, PhonePe, Cashfree, PayU, PaytmPg];
 }
 
 /// <summary>Credentials and options for one provider, edited in Admin → Payment integrations.</summary>

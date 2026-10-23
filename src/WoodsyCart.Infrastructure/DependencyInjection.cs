@@ -39,6 +39,16 @@ public static class DependencyInjection
         services.AddHostedService<Email.EmailWorker>();
         services.AddScoped<DbSeeder>();
         services.AddHttpClient<RazorpayService>();
+        services.AddHttpClient<Payments.Gateways.PhonePeGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));
+        services.AddHttpClient<Payments.Gateways.CashfreeGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));
+        services.AddHttpClient<Payments.Gateways.PayUGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));
+        services.AddHttpClient<Payments.Gateways.PaytmGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));
+        services.AddTransient<Payments.Gateways.IPaymentGateway>(sp => sp.GetRequiredService<Payments.Gateways.PhonePeGateway>());
+        services.AddTransient<Payments.Gateways.IPaymentGateway>(sp => sp.GetRequiredService<Payments.Gateways.CashfreeGateway>());
+        services.AddTransient<Payments.Gateways.IPaymentGateway>(sp => sp.GetRequiredService<Payments.Gateways.PayUGateway>());
+        services.AddTransient<Payments.Gateways.IPaymentGateway>(sp => sp.GetRequiredService<Payments.Gateways.PaytmGateway>());
+        services.AddScoped<Payments.Gateways.GatewayRegistry>();
+        services.AddHostedService<Payments.Gateways.GatewayReconcileWorker>();
 
         services.AddHttpClient<DotShowroomClient>(c =>
         {

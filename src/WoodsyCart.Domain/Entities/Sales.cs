@@ -58,6 +58,8 @@ public class Order : BaseEntity
     public string? CourierName { get; set; }
 
     public string? RazorpayOrderId { get; set; }
+    /// <summary>PhonePe / Cashfree / PayU / Paytm: our id for the latest payment attempt (order number + suffix).</summary>
+    public string? GatewayReference { get; set; }
     /// <summary>Provider that processes this order's payment (see PaymentProviders).</summary>
     public string? PaymentProvider { get; set; }
     /// <summary>Direct UPI: the exact amount the customer is asked to pay (total minus a few "fingerprint" paise).</summary>

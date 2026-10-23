@@ -11,7 +11,8 @@ namespace WoodsyCart.Infrastructure.Services;
 /// <summary>Who is asking for an order: a signed-in customer, or anyone holding the order's secret access token (guest checkout).</summary>
 public record OrderAccess(int? UserId, string? Token);
 
-public partial class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender email, PaymentConfigService payments)
+public partial class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender email, PaymentConfigService payments,
+    Payments.Gateways.GatewayRegistry gateways)
 {
     public const int ReturnWindowDays = 7;
 
@@ -281,6 +282,7 @@ public partial class OrderService(AppDbContext db, RazorpayService razorpay, Ema
         await db.CartItems.Where(c => c.UserId == user.Id && bought.Contains(c.ProductId)).ExecuteDeleteAsync();
 
         string? rzpOrderId = null;
+        Payments.Gateways.GatewayLaunch? launch = null;
         var paise = (long)Math.Round(order.Total * 100);
         if (provider == PaymentProviders.Razorpay)
         {
@@ -288,13 +290,72 @@ public partial class OrderService(AppDbContext db, RazorpayService razorpay, Ema
             order.RazorpayOrderId = rzpOrderId;
             await db.SaveChangesAsync();
         }
+        else if (PaymentProviders.Gateways.Contains(provider))
+        {
+            launch = await StartGatewayAsync(order); // the order email is sent once the payment is confirmed
+        }
         else
         {
             await NotifyOrderPlacedAsync(order);
         }
 
-        return new PlaceOrderResponse(order.OrderNumber, order.Total, order.PaymentMethod, rzpOrderId, (await razorpay.GetOptionsAsync()).KeyId,
-            paise, order.ShipName, order.ShipEmail, order.ShipPhone, order.AccessToken, isGuest, provider, GatewayMethod(order.PaymentMethod));
+        return new PlaceOrderResponse(order.OrderNumber, order.Total, order.PaymentMethod, rzpOrderId,
+            provider == PaymentProviders.Razorpay ? (await razorpay.GetOptionsAsync()).KeyId : null,
+            paise, order.ShipName, order.ShipEmail, order.ShipPhone, order.AccessToken, isGuest, provider, GatewayMethod(order.PaymentMethod), launch);
+    }
+
+    /// <summary>Opens a new payment attempt with PhonePe / Cashfree / PayU / Paytm and says how to send the customer there.</summary>
+    private async Task<Payments.Gateways.GatewayLaunch> StartGatewayAsync(Order order)
+    {
+        var gw = gateways.Get(order.PaymentProvider!);
+        var api = email.ApiUrl ?? throw new AppException("Online payment isn't set up yet (the API address is missing). Please choose another payment method.");
+        // Each attempt needs its own id at the gateway: order number + base-36 seconds + a random character (PayU allows 25 characters).
+        order.GatewayReference = $"{order.OrderNumber}-{ToBase36(DateTimeOffset.UtcNow.ToUnixTimeSeconds())}{ToBase36(System.Security.Cryptography.RandomNumberGenerator.GetInt32(36))}";
+        await db.SaveChangesAsync();
+        var code = gw.Code.ToLowerInvariant();
+        return await gw.StartAsync(new Payments.Gateways.GatewayOrderContext(order, order.GatewayReference,
+            $"{api}/api/payments/{code}/return/{order.OrderNumber}", $"{api}/api/payments/{code}/webhook"));
+    }
+
+    private static string ToBase36(long n)
+    {
+        const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+        var sb = new System.Text.StringBuilder();
+        do { sb.Insert(0, digits[(int)(n % 36)]); n /= 36; } while (n > 0);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Asks the gateway whether this order (or a specific attempt) has been paid, and records the payment if so.
+    /// The amount must match the order total. Returns the gateway's view of the payment.
+    /// </summary>
+    public async Task<Payments.Gateways.GatewayState> ReconcileGatewayAsync(Order order, string? merchantOrderId = null, CancellationToken ct = default)
+    {
+        if (order.PaymentStatus == PaymentStatus.Paid) return Payments.Gateways.GatewayState.Paid;
+        var gw = gateways.Find(order.PaymentProvider);
+        var id = merchantOrderId ?? order.GatewayReference;
+        if (gw is null || id is null || !id.StartsWith(order.OrderNumber + "-")) return Payments.Gateways.GatewayState.Pending;
+
+        Payments.Gateways.GatewayResult result;
+        try { result = await gw.GetStatusAsync(id, ct); }
+        catch (Exception) { return Payments.Gateways.GatewayState.Pending; } // gateway unreachable: the reconciler tries again
+        if (result.State != Payments.Gateways.GatewayState.Paid) return result.State;
+
+        if (result.Amount is { } amount && Math.Abs(amount - order.Total) > 0.01m)
+        {
+            if (!await db.OrderStatusHistory.AnyAsync(h => h.OrderId == order.Id && h.Note != null && h.Note.Contains(id), ct))
+            {
+                db.OrderStatusHistory.Add(new OrderStatusHistory
+                {
+                    OrderId = order.Id, Status = order.Status,
+                    Note = $"{gw.Code} reports ₹{amount:N2} paid for {id}, but the order total is ₹{order.Total:N2}. Check the gateway dashboard before confirming."
+                });
+                await db.SaveChangesAsync(ct);
+            }
+            return Payments.Gateways.GatewayState.Pending;
+        }
+        await MarkOnlinePaymentAsync(order, result.PaymentId ?? id, id, result);
+        return Payments.Gateways.GatewayState.Paid;
     }
 
     /// <summary>Razorpay checkout "method" prefill for the customer's choice.</summary>
@@ -424,30 +485,55 @@ public partial class OrderService(AppDbContext db, RazorpayService razorpay, Ema
         return (await GetOrderAsync(order.OrderNumber, access))!;
     }
 
-    /// <summary>Creates a fresh Razorpay order for an unpaid online order (customer closed the payment window earlier).</summary>
+    /// <summary>Order page: checks a pending PhonePe / Cashfree / PayU / Paytm payment with the gateway.</summary>
+    public async Task<OrderDetailDto> CheckPaymentAsync(OrderAccess access, string orderNumber)
+    {
+        var order = await FindAsync(orderNumber, access);
+        if (order.PaymentStatus != PaymentStatus.Paid && order.Status == OrderStatus.Pending) await ReconcileGatewayAsync(order);
+        return (await GetOrderAsync(order.OrderNumber, access))!;
+    }
+
+    /// <summary>Starts a fresh gateway payment for an unpaid online order (customer closed the payment window earlier).</summary>
     public async Task<PlaceOrderResponse> RetryPaymentAsync(OrderAccess access, string orderNumber)
     {
         var order = await FindAsync(orderNumber, access);
-        var viaGateway = order.PaymentProvider == PaymentProviders.Razorpay || (order.PaymentProvider is null && order.PaymentMethod == PaymentMethod.Razorpay);
+        var viaGateway = PaymentProviders.Gateways.Contains(order.PaymentProvider) || (order.PaymentProvider is null && order.PaymentMethod == PaymentMethod.Razorpay);
         if (!viaGateway || order.PaymentStatus == PaymentStatus.Paid || order.Status != OrderStatus.Pending)
             throw new AppException("This order doesn't need an online payment.");
         var paise = (long)Math.Round(order.Total * 100);
+        if (order.PaymentProvider is { } p && p != PaymentProviders.Razorpay)
+        {
+            // The previous attempt may have gone through after all.
+            if (await ReconcileGatewayAsync(order) == Payments.Gateways.GatewayState.Paid)
+                throw new AppException("This order is already paid. Refresh the page to see it.");
+            var launch = await StartGatewayAsync(order);
+            return new PlaceOrderResponse(order.OrderNumber, order.Total, order.PaymentMethod, null, null, paise, order.ShipName, order.ShipEmail,
+                order.ShipPhone, order.AccessToken, access.UserId is null, p, GatewayMethod(order.PaymentMethod), launch);
+        }
         order.RazorpayOrderId = await razorpay.CreateOrderAsync(paise, order.OrderNumber);
         await db.SaveChangesAsync();
         return new PlaceOrderResponse(order.OrderNumber, order.Total, order.PaymentMethod, order.RazorpayOrderId, (await razorpay.GetOptionsAsync()).KeyId,
             paise, order.ShipName, order.ShipEmail, order.ShipPhone, order.AccessToken, access.UserId is null, PaymentProviders.Razorpay, GatewayMethod(order.PaymentMethod));
     }
 
-    public async Task MarkOnlinePaymentAsync(Order order, string paymentId)
+    public async Task MarkOnlinePaymentAsync(Order order, string paymentId, string? gatewayOrderId = null, Payments.Gateways.GatewayResult? details = null)
     {
-        if (await db.Payments.AnyAsync(p => p.GatewayPaymentId == paymentId)) return;
+        if (order.PaymentStatus == PaymentStatus.Paid || await db.Payments.AnyAsync(p => p.GatewayPaymentId == paymentId)) return;
         var payment = new Payment
         {
             OrderId = order.Id, Method = order.PaymentMethod, Amount = order.Total, IsSuccessful = true,
-            GatewayOrderId = order.RazorpayOrderId, GatewayPaymentId = paymentId
+            GatewayOrderId = gatewayOrderId ?? order.RazorpayOrderId, GatewayPaymentId = paymentId
         };
         db.Payments.Add(payment);
-        await ApplyGatewayDetailsAsync(order, payment);
+        if (details is not null)
+        {
+            // PhonePe / Cashfree / PayU / Paytm: details come with the status check. Their fees are booked from settlements.
+            if (details.Method is { } m) { payment.Method = m; order.PaymentMethod = m; }
+            payment.Reference = details.BankReference;
+            payment.Notes = details.Description;
+            if (details.PaidAt is { } at) payment.PaidAt = at;
+        }
+        else await ApplyGatewayDetailsAsync(order, payment);
         order.AmountPaid += order.Total;
         order.PaymentStatus = PaymentStatus.Paid;
         if (order.Status == OrderStatus.Pending)
@@ -468,6 +554,7 @@ public partial class OrderService(AppDbContext db, RazorpayService razorpay, Ema
     private async Task ApplyGatewayDetailsAsync(Order order, Payment payment)
     {
         if (payment.GatewayPaymentId is null) return;
+        if (order.PaymentProvider is { } provider && provider != PaymentProviders.Razorpay) return; // only Razorpay reports details and fees per payment
         RzpPayment? details;
         try
         {

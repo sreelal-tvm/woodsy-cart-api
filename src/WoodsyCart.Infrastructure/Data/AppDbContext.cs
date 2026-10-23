@@ -161,6 +161,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => x.OrderNumber).IsUnique();
             e.Property(x => x.AccessToken).HasMaxLength(64);
             e.Property(x => x.PaymentProvider).HasMaxLength(40);
+            e.Property(x => x.GatewayReference).HasMaxLength(64);
+            e.HasIndex(x => x.GatewayReference);
             e.Property(x => x.CustomerUtr).HasMaxLength(40);
             e.HasIndex(x => new { x.PaymentStatus, x.UpiAmount });
             e.HasIndex(x => x.CreatedAt);

@@ -123,11 +123,11 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
         var s = await db.BusinessSettings.AsNoTracking().FirstAsync();
         var methods = await payments.GetCheckoutMethodsAsync();
         var rzp = await razorpay.GetOptionsAsync();
-        var online = methods.Any(m => m.Provider == PaymentProviders.Razorpay);
+        var online = methods.Any(m => PaymentProviders.Gateways.Contains(m.Provider));
         var address = string.Join(", ", new[] { s.AddressLine1, s.AddressLine2, s.City, s.State, s.Pincode }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
         return new PublicSettingsDto(s.BusinessName, s.Tagline, s.Phone, s.WhatsApp, s.Email, address,
             s.ShippingFee, s.FreeShippingThreshold, s.CodEnabled, s.CodFee, s.CodMaxOrderAmount,
-            online, online ? rzp.KeyId : null,
+            online, methods.Any(m => m.Provider == PaymentProviders.Razorpay) ? rzp.KeyId : null,
             s.InstagramUrl, s.FacebookUrl, s.YoutubeUrl, s.DefaultDeliveryDays,
             s.MapsEnabled && !string.IsNullOrWhiteSpace(s.GoogleMapsApiKey) ? s.GoogleMapsApiKey : null);
     }
@@ -302,6 +302,10 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
     [HttpPost("{orderNumber}/pay")]
     public Task<PlaceOrderResponse> Pay(string orderNumber, string? token) => orders.RetryPaymentAsync(Access(token), orderNumber);
 
+    /// <summary>Order page asks the gateway (PhonePe / Cashfree / PayU / Paytm) whether a pending online payment went through.</summary>
+    [HttpPost("{orderNumber}/check-payment")]
+    public Task<OrderDetailDto> CheckPayment(string orderNumber, string? token) => orders.CheckPaymentAsync(Access(token), orderNumber);
+
     [HttpPost("{orderNumber}/return")]
     public async Task<IActionResult> Return(string orderNumber, ReturnRequest req, string? token)
     {
@@ -329,8 +333,66 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
 
 [Route("api/payments")]
 public class PaymentsController(RazorpayService razorpay, OrderService orders, AppDbContext db,
-    PaymentConfigService payments, PaymentAlertService alerts) : ApiControllerBase
+    PaymentConfigService payments, PaymentAlertService alerts, EmailSender email) : ApiControllerBase
 {
+    /// <summary>
+    /// The customer comes back from PhonePe / Cashfree / PayU / Paytm (GET or form POST). The payment is checked with the
+    /// gateway server-to-server, then the customer is sent to their order page. Nothing in the request is trusted.
+    /// </summary>
+    [AcceptVerbs("GET", "POST")]
+    [Route("{code}/return/{orderNumber}")]
+    public async Task<IActionResult> GatewayReturn(string code, string orderNumber)
+    {
+        var store = email.StorefrontUrl ?? "";
+        var order = await db.Orders.FirstOrDefaultAsync(o => o.OrderNumber == orderNumber);
+        if (order is null || !string.Equals(order.PaymentProvider, code, StringComparison.OrdinalIgnoreCase)) return Redirect($"{store}/");
+        var attempt = WoodsyCart.Infrastructure.Payments.Gateways.GatewayReconcileWorker.FindMerchantOrderId(await ReadBodyAsync(), await ReadFieldsAsync());
+        var state = await orders.ReconcileGatewayAsync(order, attempt is not null && attempt.StartsWith(order.OrderNumber + "-") ? attempt : null);
+        var result = state switch
+        {
+            WoodsyCart.Infrastructure.Payments.Gateways.GatewayState.Paid => "paid",
+            WoodsyCart.Infrastructure.Payments.Gateways.GatewayState.Failed => "failed",
+            _ => "pending"
+        };
+        // No access token here: anyone can call this URL. The order page uses the customer's sign-in or saved guest link.
+        return Redirect($"{store}/order/{Uri.EscapeDataString(order.OrderNumber)}?payment={result}");
+    }
+
+    /// <summary>
+    /// Payment notifications from PhonePe / Cashfree / PayU / Paytm. Only used as a trigger: the payment is confirmed
+    /// with the gateway's own status API, so a forged notification can't mark an order paid.
+    /// </summary>
+    [HttpPost("{code}/webhook")]
+    [RequestSizeLimit(100_000)]
+    public async Task<IActionResult> GatewayWebhook(string code)
+    {
+        var id = WoodsyCart.Infrastructure.Payments.Gateways.GatewayReconcileWorker.FindMerchantOrderId(await ReadBodyAsync(), await ReadFieldsAsync());
+        var dash = id?.LastIndexOf('-') ?? -1;
+        if (id is null || dash <= 0) return Ok();
+        var orderNumber = id[..dash];
+        var order = await db.Orders.FirstOrDefaultAsync(o => o.OrderNumber == orderNumber);
+        if (order is not null && string.Equals(order.PaymentProvider, code, StringComparison.OrdinalIgnoreCase))
+            await orders.ReconcileGatewayAsync(order, id);
+        return Ok();
+    }
+
+    private string? _body;
+    private async Task<string> ReadBodyAsync()
+    {
+        if (_body is not null) return _body;
+        if (Request.HasFormContentType) return _body = "";
+        using var reader = new StreamReader(Request.Body);
+        return _body = await reader.ReadToEndAsync();
+    }
+
+    private async Task<Dictionary<string, string>> ReadFieldsAsync()
+    {
+        var fields = Request.Query.ToDictionary(q => q.Key, q => q.Value.ToString());
+        if (Request.HasFormContentType)
+            foreach (var f in await Request.ReadFormAsync()) fields[f.Key] = f.Value.ToString();
+        return fields;
+    }
+
     /// <summary>
     /// Direct-UPI confirmation: the SMS/notification forwarder on the owner's phone posts every "money received"
     /// message here (plain text or JSON). Protected by the alert key from Admin → Payment integrations.

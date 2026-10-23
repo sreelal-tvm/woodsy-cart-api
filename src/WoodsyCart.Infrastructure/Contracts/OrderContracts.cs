@@ -30,7 +30,7 @@ public record PlaceOrderResponse(
     string OrderNumber, decimal Total, PaymentMethod PaymentMethod,
     string? RazorpayOrderId, string? RazorpayKeyId, long AmountInPaise,
     string CustomerName, string? CustomerEmail, string CustomerPhone, string AccessToken, bool IsGuest,
-    string? PaymentProvider = null, string? GatewayMethod = null);
+    string? PaymentProvider = null, string? GatewayMethod = null, WoodsyCart.Infrastructure.Payments.Gateways.GatewayLaunch? Launch = null);
 
 /// <summary>How to pay a pending direct-UPI or bank-transfer order (shown on the order page).</summary>
 public record PaymentInstructionsDto(

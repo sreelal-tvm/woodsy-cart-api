@@ -30,6 +30,7 @@ public class EmailSender(EmailQueue queue, EmailSettingsService settings, IOptio
 {
     public string? StorefrontUrl => options.Value.StorefrontUrl?.TrimEnd('/');
     public string? AdminUrl => options.Value.AdminUrl?.TrimEnd('/');
+    public string? ApiUrl => options.Value.ApiUrl?.TrimEnd('/');
 
     /// <summary>Link to a customer's order that works without signing in (guest checkout, manual orders).</summary>
     public string OrderLink(Order o) => $"{StorefrontUrl}/order/{o.OrderNumber}?token={o.AccessToken}";

@@ -24,7 +24,7 @@ public record AlertRow(int Id, DateTime CreatedAt, string Source, string? Sender
 /// <summary>Admin → Payment integrations: providers, checkout methods and direct-UPI verification.</summary>
 [Route("api/admin/payments")]
 public class AdminPaymentsController(AppDbContext db, PaymentConfigService config, PaymentAlertService alerts,
-    OrderService orders, RazorpayService razorpay) : AdminControllerBase
+    OrderService orders, RazorpayService razorpay, WoodsyCart.Infrastructure.Payments.Gateways.GatewayRegistry gateways) : AdminControllerBase
 {
     [HttpGet("providers")]
     public Task<List<ProviderView>> Providers() => config.GetProvidersAsync();
@@ -55,7 +55,15 @@ public class AdminPaymentsController(AppDbContext db, PaymentConfigService confi
             case PaymentProviders.BankTransfer:
                 return new(!string.IsNullOrEmpty(v.GetValueOrDefault("accountNumber")), "Bank details are shown to customers exactly as saved.");
             default:
-                return new(false, "This provider's checkout integration isn't built yet — your credentials are saved for later.");
+                if (gateways.Find(code) is not { } gw) return new(false, "Unknown payment provider.");
+                try
+                {
+                    var (good, message) = await gw.TestAsync();
+                    return new(good, message);
+                }
+                catch (AppException e) { return new(false, e.Message); }
+                catch (HttpRequestException) { return new(false, "Couldn't reach the gateway. Check the internet connection and try again."); }
+                catch (TaskCanceledException) { return new(false, "The gateway didn't answer in time. Try again."); }
         }
     }
 

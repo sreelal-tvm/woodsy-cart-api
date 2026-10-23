@@ -349,7 +349,7 @@ public class OrdersController(AppDbContext db, OrderService orders, InvoiceServi
 
 public record RefundUpdate(RefundStatus Status, decimal Amount, string? AdminNotes, string? Reference);
 public record RefundRow(int Id, int OrderId, string OrderNumber, string Customer, RefundType Type, RefundStatus Status, decimal Amount, string Reason,
-    string? CustomerComment, string? AdminNotes, string? Reference, DateTime CreatedAt, DateTime? ProcessedAt, PaymentMethod PaymentMethod);
+    string? CustomerComment, string? AdminNotes, string? Reference, DateTime CreatedAt, DateTime? ProcessedAt, PaymentMethod PaymentMethod, string? PaymentProvider = null);
 public record CreateRefund(int OrderId, RefundType Type, decimal Amount, string Reason);
 
 public class RefundsController(AppDbContext db, OrderService orders) : AdminControllerBase
@@ -358,7 +358,7 @@ public class RefundsController(AppDbContext db, OrderService orders) : AdminCont
     public Task<List<RefundRow>> List(RefundStatus? status) => db.Refunds.AsNoTracking()
         .Where(r => status == null || r.Status == status).OrderByDescending(r => r.CreatedAt)
         .Select(r => new RefundRow(r.Id, r.OrderId, r.Order!.OrderNumber, r.Order.ShipName, r.Type, r.Status, r.Amount, r.Reason, r.CustomerComment,
-            r.AdminNotes, r.Reference, r.CreatedAt, r.ProcessedAt, r.Order.PaymentMethod)).ToListAsync();
+            r.AdminNotes, r.Reference, r.CreatedAt, r.ProcessedAt, r.Order.PaymentMethod, r.Order.PaymentProvider)).ToListAsync();
 
     [HttpPost]
     public async Task<IActionResult> Create(CreateRefund r)
