@@ -64,3 +64,6 @@ src/WoodsyCart.Api/appsettings.Production.json
 
 # Data Protection keys used to encrypt payment secrets — keep out of git, back up separately
 src/WoodsyCart.Api/App_Data/
+
+# Visual Studio local cache
+.vs/
