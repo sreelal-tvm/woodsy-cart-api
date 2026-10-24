@@ -19,8 +19,9 @@
 		-Server
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
-		Cache-Control "no-cache"
 	}
+	# "?" = only when no rule below set it: everything else is fetched fresh.
+	header ?Cache-Control "no-cache"
 	@hashed path_regexp hashed -[A-Za-z0-9]{8,}\.(js|css|woff2?)$
 	header @hashed Cache-Control "public, max-age=31536000, immutable"
 	@pictures path *.png *.jpg *.jpeg *.webp *.avif *.gif *.svg *.ico *.woff *.woff2 *.ttf
@@ -51,14 +52,18 @@ http://:8080 {
 			header_regexp bot User-Agent (?i)(facebookexternalhit|facebookcatalog|meta-externalagent|WhatsApp|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Applebot|Embedly|Iframely)
 			path_regexp page ^/(product|offers)/([A-Za-z0-9-]+)/?$
 		}
-		try_files @botProduct /share/{re.page.1}/{re.page.2}.html
+		route @botProduct {
+			try_files /share/{re.page.1}/{re.page.2}.html
+		}
 
 		@botPage {
 			header_regexp bot User-Agent (?i)(facebookexternalhit|facebookcatalog|meta-externalagent|WhatsApp|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Applebot|Embedly|Iframely)
 			path_regexp other ^[^.]*$
 			not path /share/*
 		}
-		try_files @botPage /share/index.html
+		route @botPage {
+			try_files /share/index.html
+		}
 
 		# App routes: any address that is not a real file opens the app, which shows the right page.
 		try_files {path} /index.html
