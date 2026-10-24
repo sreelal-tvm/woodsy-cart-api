@@ -64,8 +64,11 @@ public class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpCli
         if (!File.Exists(src)) { img.CleanStatus = ImageCleanStatus.Failed; img.CleanReport = "{\"message\":\"original file missing\"}"; await db.SaveChangesAsync(ct); return true; }
 
         var stem = Path.ChangeExtension(img.OriginalPath, null)!;
-        var cleanRel = stem + "_c.webp";
-        var thumbRel = stem + "_ct.webp";
+        // A new file name on every run: Cloudflare and browsers keep photos for a year, so overwriting the same name
+        // would leave customers looking at the old picture.
+        var version = DateTime.UtcNow.Ticks.ToString("x");
+        var cleanRel = $"{stem}_c-{version}.webp";
+        var thumbRel = $"{stem}_ct-{version}.webp";
 
         CleanerReport? report;
         try
@@ -102,6 +105,7 @@ public class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpCli
         var changed = report.Message == "changed" && File.Exists(storage.FullPath(cleanRel));
         img.LocalPath = changed ? cleanRel : img.OriginalPath;
         img.LocalThumbnailPath = changed && File.Exists(storage.FullPath(thumbRel)) ? thumbRel : img.OriginalThumbnailPath;
+        if (changed) DeleteOtherVersions(stem, cleanRel, thumbRel);
         img.CleanStatus = report.Status switch
         {
             "cleaned" => ImageCleanStatus.Cleaned,
@@ -130,15 +134,49 @@ public class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpCli
     public async Task ApproveAsync(int imageId)
     {
         var img = await db.ProductImages.FirstOrDefaultAsync(i => i.Id == imageId) ?? throw new Common.AppException("Image not found", 404);
-        var cleaned = Path.ChangeExtension(img.OriginalPath ?? img.LocalPath ?? "", null) + "_c.webp";
-        if (img.OriginalPath is not null && File.Exists(storage.FullPath(cleaned)))
+        if (img.OriginalPath is not null && LatestCleaned(Path.ChangeExtension(img.OriginalPath, null)!) is { } latest)
         {
-            img.LocalPath = cleaned;
-            var thumb = Path.ChangeExtension(img.OriginalPath, null) + "_ct.webp";
-            if (File.Exists(storage.FullPath(thumb))) img.LocalThumbnailPath = thumb;
+            img.LocalPath = latest.Main;
+            if (latest.Thumb is not null) img.LocalThumbnailPath = latest.Thumb;
         }
         img.CleanStatus = ImageCleanStatus.Approved;
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>The newest cleaned version of a photo (and its thumbnail), as paths relative to the media root.</summary>
+    private (string Main, string? Thumb)? LatestCleaned(string stem)
+    {
+        var (dir, name, relDir) = Locate(stem);
+        if (!Directory.Exists(dir)) return null;
+        var newest = new DirectoryInfo(dir).GetFiles($"{name}_c-*.webp").OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault();
+        if (newest is not null)
+        {
+            var thumb = $"{name}_ct-{newest.Name[(name.Length + 3)..]}";
+            return ($"{relDir}{newest.Name}", File.Exists(Path.Combine(dir, thumb)) ? $"{relDir}{thumb}" : null);
+        }
+        // Photos cleaned before versioned names were introduced
+        return File.Exists(Path.Combine(dir, $"{name}_c.webp"))
+            ? ($"{relDir}{name}_c.webp", File.Exists(Path.Combine(dir, $"{name}_ct.webp")) ? $"{relDir}{name}_ct.webp" : null)
+            : null;
+    }
+
+    /// <summary>Removes earlier cleaned versions of a photo, keeping the ones just written.</summary>
+    private void DeleteOtherVersions(string stem, string keepMain, string keepThumb)
+    {
+        var (dir, name, _) = Locate(stem);
+        if (!Directory.Exists(dir)) return;
+        var keep = new[] { Path.GetFileName(keepMain), Path.GetFileName(keepThumb) };
+        foreach (var pattern in new[] { $"{name}_c-*.webp", $"{name}_ct-*.webp", $"{name}_c.webp", $"{name}_ct.webp" })
+            foreach (var f in Directory.GetFiles(dir, pattern))
+                if (!keep.Contains(Path.GetFileName(f)))
+                    try { File.Delete(f); } catch (IOException) { /* in use; removed next time */ }
+    }
+
+    private (string Dir, string Name, string RelDir) Locate(string stem)
+    {
+        var rel = stem.Replace('\\', '/');
+        var slash = rel.LastIndexOf('/');
+        return (Path.GetDirectoryName(storage.FullPath(rel))!, rel[(slash + 1)..], slash < 0 ? "" : rel[..(slash + 1)]);
     }
 }
 

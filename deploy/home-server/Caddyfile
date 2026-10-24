@@ -1,0 +1,88 @@
+# WoodsyCart storefront and admin, served on this machine only.
+# Cloudflare Tunnel brings visitors here: woodsycart.com -> 127.0.0.1:8080, admin.woodsycart.com -> 127.0.0.1:8081.
+# Cloudflare provides HTTPS, so Caddy's own certificates are switched off.
+#
+# Check:  .\caddy.exe validate --config Caddyfile
+# Apply:  .\caddy.exe reload --config Caddyfile   (or Restart-Service Caddy)
+
+{
+	admin localhost:2019
+	auto_https off
+	persist_config off
+}
+
+# Shared response headers. Caching rules match the address the visitor asked for:
+# app pages, index.html, config.json and the service-worker files are always fetched fresh;
+# hashed app bundles are kept for a year; pictures and fonts for 30 days.
+(headers) {
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Cache-Control "no-cache"
+	}
+	@hashed path_regexp hashed -[A-Za-z0-9]{8,}\.(js|css|woff2?)$
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+	@pictures path *.png *.jpg *.jpeg *.webp *.avif *.gif *.svg *.ico *.woff *.woff2 *.ttf
+	header @pictures Cache-Control "public, max-age=2592000"
+	@hourly path /manifest.webmanifest /robots.txt /sitemap.xml
+	header @hourly Cache-Control "public, max-age=3600"
+	header /manifest.webmanifest >Content-Type application/manifest+json
+}
+
+# ---------- Storefront: woodsycart.com ----------
+http://:8080 {
+	bind 127.0.0.1
+	root * C:/WoodsyCart/web
+	encode zstd gzip
+	import headers
+
+	log {
+		output file C:/WoodsyCart/logs/caddy-web.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+
+	route {
+		# Link previews: chat and social apps don't run JavaScript, so their bots get the small pages the API
+		# writes into share/ (product photo, name, price). Real visitors and Google get the app.
+		@botProduct {
+			header_regexp bot User-Agent (?i)(facebookexternalhit|facebookcatalog|meta-externalagent|WhatsApp|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Applebot|Embedly|Iframely)
+			path_regexp page ^/(product|offers)/([A-Za-z0-9-]+)/?$
+		}
+		try_files @botProduct /share/{re.page.1}/{re.page.2}.html
+
+		@botPage {
+			header_regexp bot User-Agent (?i)(facebookexternalhit|facebookcatalog|meta-externalagent|WhatsApp|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Applebot|Embedly|Iframely)
+			path_regexp other ^[^.]*$
+			not path /share/*
+		}
+		try_files @botPage /share/index.html
+
+		# App routes: any address that is not a real file opens the app, which shows the right page.
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# ---------- Admin: admin.woodsycart.com ----------
+http://:8081 {
+	bind 127.0.0.1
+	root * C:/WoodsyCart/admin
+	encode zstd gzip
+	import headers
+	header X-Frame-Options DENY
+
+	log {
+		output file C:/WoodsyCart/logs/caddy-admin.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+
+	route {
+		try_files {path} /index.html
+		file_server
+	}
+}

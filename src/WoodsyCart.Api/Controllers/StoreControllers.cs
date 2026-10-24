@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
+using Microsoft.AspNetCore.RateLimiting;
+using WoodsyCart.Api.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using WoodsyCart.Domain.Entities;
@@ -15,13 +18,16 @@ namespace WoodsyCart.Api.Controllers;
 [Route("api/auth")]
 public class AuthController(AuthService auth, AppDbContext db) : ApiControllerBase
 {
+    [EnableRateLimiting(Traffic.Auth)]
     [HttpPost("register")]
     public Task<AuthResponse> Register(RegisterRequest req) => auth.RegisterAsync(req);
 
+    [EnableRateLimiting(Traffic.Auth)]
     [HttpPost("login")]
     public Task<AuthResponse> Login(LoginRequest req) => auth.LoginAsync(req, adminOnly: false);
 
     /// <summary>Always answers the same way, so it can't be used to find out who has an account.</summary>
+    [EnableRateLimiting(Traffic.Auth)]
     [HttpPost("forgot-password")]
     public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest req)
     {
@@ -29,13 +35,16 @@ public class AuthController(AuthService auth, AppDbContext db) : ApiControllerBa
         return Ok(new { message = $"If an account exists for this email, we've sent a link to reset the password. It expires in {AuthService.ResetLinkMinutes} minutes." });
     }
 
+    [EnableRateLimiting(Traffic.Auth)]
     [HttpPost("reset-password")]
     public Task<AuthResponse> ResetPassword(ResetPasswordRequest req) => auth.ResetPasswordAsync(req);
 
+    [EnableRateLimiting(Traffic.Auth)]
     [HttpPost("admin/login")]
     public Task<AuthResponse> AdminLogin(LoginRequest req) => auth.LoginAsync(req, adminOnly: true);
 
     /// <summary>Staff only; the link opens the admin app. Answers the same way whether or not the account exists.</summary>
+    [EnableRateLimiting(Traffic.Auth)]
     [HttpPost("admin/forgot-password")]
     public async Task<IActionResult> AdminForgotPassword(ForgotPasswordRequest req)
     {
@@ -43,6 +52,7 @@ public class AuthController(AuthService auth, AppDbContext db) : ApiControllerBa
         return Ok(new { message = $"If a staff account exists for this email, we've sent a link to reset the password. It expires in {AuthService.ResetLinkMinutes} minutes." });
     }
 
+    [EnableRateLimiting(Traffic.Auth)]
     [HttpPost("admin/reset-password")]
     public Task<AuthResponse> AdminResetPassword(ResetPasswordRequest req) => auth.ResetPasswordAsync(req, admin: true);
 
@@ -71,37 +81,47 @@ public class AuthController(AuthService auth, AppDbContext db) : ApiControllerBa
 [Route("api/catalog")]
 public class CatalogController(CatalogService catalog) : ApiControllerBase
 {
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("home")]
     public Task<HomeDto> Home() => catalog.GetHomeAsync();
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("categories")]
     public Task<List<CategoryDto>> Categories() => catalog.GetCategoriesAsync();
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("products")]
     public Task<PagedResult<ProductCardDto>> Products([FromQuery] ProductQuery q) => catalog.SearchAsync(q);
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("facets")]
     public Task<FacetsDto> Facets([FromQuery] ProductQuery q) => catalog.GetFacetsAsync(q);
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("products/{slugOrId}")]
     public async Task<ProductDetailDto> Product(string slugOrId) =>
         await catalog.GetProductAsync(slugOrId) ?? throw new AppException("Product not found", 404);
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("offers")]
     public Task<List<OfferDto>> Offers() => catalog.GetLiveOffersAsync();
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("offers/{slug}")]
     public async Task<OfferDto> Offer(string slug) => await catalog.GetOfferAsync(slug) ?? throw new AppException("Offer not found", 404);
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("products/{id:int}/related")]
     public Task<List<ProductCardDto>> Related(int id) => catalog.GetRelatedAsync(id);
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("products/{id:int}/reviews")]
     public Task<PagedResult<ReviewDto>> Reviews(int id, int page = 1) => catalog.GetReviewsAsync(id, Math.Max(1, page));
 
     [Authorize, HttpGet("products/{id:int}/my-review")]
     public Task<MyReviewStatusDto> MyReview(int id) => catalog.GetMyReviewStatusAsync(id, UserId);
 
+    [EnableRateLimiting(Traffic.Forms)]
     [Authorize, HttpPost("products/{id:int}/reviews")]
     public async Task<IActionResult> AddReview(int id, CreateReviewRequest req)
     {
@@ -114,9 +134,11 @@ public class CatalogController(CatalogService catalog) : ApiControllerBase
 public class SiteController(AppDbContext db, OrderService orders, PaymentConfigService payments, RazorpayService razorpay, EmailSender email) : ApiControllerBase
 {
     /// <summary>Payment methods offered at checkout (configured in Admin → Payment integrations).</summary>
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("payment-methods")]
     public Task<List<CheckoutMethodDto>> PaymentMethods() => payments.GetCheckoutMethodsAsync();
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("settings")]
     public async Task<PublicSettingsDto> Settings()
     {
@@ -132,9 +154,11 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
             s.MapsEnabled && !string.IsNullOrWhiteSpace(s.GoogleMapsApiKey) ? s.GoogleMapsApiKey : null);
     }
 
+    [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("pincode/{pincode}")]
     public Task<PincodeCheckDto> Pincode(string pincode, double? lat, double? lng) => orders.CheckPincodeAsync(pincode, lat, lng);
 
+    [EnableRateLimiting(Traffic.Forms)]
     [HttpPost("enquiry")]
     public async Task<IActionResult> Enquiry(EnquiryRequest req)
     {
@@ -257,6 +281,7 @@ public class CheckoutController(OrderService orders) : ApiControllerBase
     public Task<QuoteDto> Quote(QuoteRequest req) => orders.QuoteAsync(req, OptionalUserId);
 
     /// <summary>Signed-in customers use their saved addresses; guests send GuestEmail + Address.</summary>
+    [EnableRateLimiting(Traffic.Orders)]
     [HttpPost("place-order")]
     public Task<PlaceOrderResponse> Place(PlaceOrderRequest req) => orders.PlaceOrderAsync(OptionalUserId, req);
 
@@ -278,6 +303,7 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
         await orders.GetOrderAsync(orderNumber, Access(token)) ?? throw new AppException("Order not found", 404);
 
     /// <summary>Public tracking with order number + last digits of phone.</summary>
+    [EnableRateLimiting(Traffic.Lookup)]
     [HttpGet("track")]
     public async Task<OrderDetailDto> Track(string orderNumber, string phone)
     {
@@ -287,6 +313,7 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
                ?? throw new AppException("No order found with these details. Check the order number and the mobile number you gave at checkout.", 404);
     }
 
+    [EnableRateLimiting(Traffic.Forms)]
     [HttpPost("{orderNumber}/cancel")]
     public async Task<IActionResult> Cancel(string orderNumber, CancelOrderRequest req, string? token)
     {
@@ -295,6 +322,7 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
     }
 
     /// <summary>Customer enters the UPI / bank reference after paying directly (no gateway).</summary>
+    [EnableRateLimiting(Traffic.Forms)]
     [HttpPost("{orderNumber}/utr")]
     public Task<OrderDetailDto> SubmitUtr(string orderNumber, SubmitUtrRequest req, string? token) =>
         orders.SubmitUtrAsync(Access(token), orderNumber, req.Utr);
@@ -306,6 +334,7 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
     [HttpPost("{orderNumber}/check-payment")]
     public Task<OrderDetailDto> CheckPayment(string orderNumber, string? token) => orders.CheckPaymentAsync(Access(token), orderNumber);
 
+    [EnableRateLimiting(Traffic.Forms)]
     [HttpPost("{orderNumber}/return")]
     public async Task<IActionResult> Return(string orderNumber, ReturnRequest req, string? token)
     {
@@ -314,6 +343,7 @@ public class OrdersController(OrderService orders, InvoiceService invoices, AppD
     }
 
     /// <summary>Rate / review a delivered item: signed-in owner, the order's access token, or the delivery phone (tracking page).</summary>
+    [EnableRateLimiting(Traffic.Forms)]
     [HttpPost("{orderNumber}/reviews")]
     public Task<List<OrderReviewDto>> Review(string orderNumber, OrderReviewRequest req, string? token, string? phone) =>
         orders.ReviewItemAsync(Access(token), phone, orderNumber.Trim().ToUpper(), req);
