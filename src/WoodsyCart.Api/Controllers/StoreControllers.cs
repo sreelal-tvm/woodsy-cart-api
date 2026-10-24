@@ -140,6 +140,7 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
 
     [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("settings")]
+    [HttpHead("settings")] // uptime monitors check with HEAD
     public async Task<PublicSettingsDto> Settings()
     {
         var s = await db.BusinessSettings.AsNoTracking().FirstAsync();
