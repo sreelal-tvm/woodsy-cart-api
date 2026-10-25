@@ -91,3 +91,32 @@ http://:8081 {
 		file_server
 	}
 }
+
+# ---------- QA: qa.woodsycart.com and qaadmin.woodsycart.com ----------
+# Same apps, test data (API on localhost:5300). Hidden from search engines; Cloudflare Access asks for the email code.
+http://:8090 {
+	bind 127.0.0.1
+	root * C:/WoodsyCart/qa/web
+	encode zstd gzip
+	import headers
+	header X-Robots-Tag "noindex, nofollow"
+
+	route {
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+http://:8091 {
+	bind 127.0.0.1
+	root * C:/WoodsyCart/qa/admin
+	encode zstd gzip
+	import headers
+	header X-Frame-Options DENY
+	header X-Robots-Tag "noindex, nofollow"
+
+	route {
+		try_files {path} /index.html
+		file_server
+	}
+}
