@@ -68,6 +68,18 @@ public enum BackgroundStatus
     Failed = 6
 }
 
+public enum SocialPlatform { Instagram = 0, Facebook = 1 }
+
+public enum SocialPostStatus
+{
+    Queued = 0,         // waiting for its time (ScheduledAt)
+    Publishing = 1,
+    Published = 2,      // live and matches the product
+    OutOfDate = 3,      // live, but the product changed (Instagram: copy the new caption or replace the post)
+    Failed = 4,
+    Removed = 5         // deleted from the platform or taken out of the queue
+}
+
 public enum ExpenseCategory
 {
     Marketing = 0, Advertising = 1, Packaging = 2, Delivery = 3, PaymentGatewayFees = 4,

@@ -24,13 +24,15 @@ public class InvalidateCatalogCacheAttribute : ActionFilterAttribute
 public record AdminProductRow(int Id, string Name, string Slug, string? ImageUrl, int CategoryId, string CategoryName,
     decimal VendorPrice, decimal GstRate, decimal VendorCost, decimal SellingPrice, decimal Mrp, decimal Margin, decimal MarginPercent, decimal? PreviousVendorPrice,
     bool IsActive, bool IsAvailable, bool IsFeatured, bool VendorPriceChanged, int VariantsCount, ProductSource Source,
-    decimal? CommissionPercentOverride, int SoldCount, decimal RatingAverage, DateTime? LastSyncedAt, DateTime CreatedAt);
+    decimal? CommissionPercentOverride, int SoldCount, decimal RatingAverage, DateTime? LastSyncedAt, DateTime CreatedAt,
+    Dictionary<string, string>? Social = null);
 
 public class AdminProductQuery
 {
     public string? Search { get; set; }
     public int? CategoryId { get; set; }
     public string? Status { get; set; } // published, draft, unavailable, price-changed, featured, low-margin
+    public string? Social { get; set; } // not-posted, posted, out-of-date, queued, failed (Instagram or Facebook)
     public string Sort { get; set; } = "newest";
     public int Page { get; set; } = 1;
     public int PageSize { get; set; } = 25;
@@ -66,7 +68,7 @@ public record PriceCalcRequest(decimal VendorMrp, decimal VendorPrice, decimal? 
 
 [InvalidateCatalogCache]
 public class ProductsController(AppDbContext db, PricingService pricing, FileStorage storage,
-    WoodsyCart.Infrastructure.Images.ImageCleaningQueue cleaningQueue) : AdminControllerBase
+    WoodsyCart.Infrastructure.Images.ImageCleaningQueue cleaningQueue, WoodsyCart.Infrastructure.Social.SocialService social) : AdminControllerBase
 {
     [HttpGet]
     public async Task<PagedResult<AdminProductRow>> List([FromQuery] AdminProductQuery q)
@@ -92,6 +94,21 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
             "low-margin" => query.Where(p => p.SellingPrice > 0 && (p.SellingPrice - (incl ? p.VendorPrice : p.VendorPrice * (100 + p.GstRate) / 100)) * 100 / p.SellingPrice < 8),
             _ => query
         };
+        if (!string.IsNullOrEmpty(q.Social))
+        {
+            SocialPostStatus[] live = [SocialPostStatus.Published, SocialPostStatus.OutOfDate], taken = [.. live, SocialPostStatus.Queued, SocialPostStatus.Publishing];
+            var wanted = q.Social switch
+            {
+                "posted" => live,
+                "out-of-date" => [SocialPostStatus.OutOfDate],
+                "queued" => [SocialPostStatus.Queued, SocialPostStatus.Publishing],
+                "failed" => [SocialPostStatus.Failed],
+                _ => taken
+            };
+            query = q.Social == "not-posted"
+                ? query.Where(p => p.IsActive && !db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status)))
+                : query.Where(p => db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status)));
+        }
         query = q.Sort switch
         {
             "name" => query.OrderBy(p => p.Name),
@@ -111,6 +128,7 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
             p.PreviousVendorPrice, p.IsActive, p.IsAvailable, p.IsFeatured, p.VendorPriceChanged, Variants = p.Variants.Count(v => v.IsActive), p.Source,
             p.CommissionPercentOverride, p.SoldCount, p.RatingAverage, p.LastSyncedAt, p.CreatedAt
         }).ToListAsync();
+        var socialStatus = await social.StatusesAsync(page.Select(p => p.Id).ToList());
         var items = page.Select(p =>
         {
             var cost = incl ? p.VendorPrice : Math.Round(p.VendorPrice * (100 + p.GstRate) / 100, 2);
@@ -118,7 +136,7 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
             return new AdminProductRow(p.Id, p.Name, p.Slug, p.Image, p.CategoryId, p.CategoryName, p.VendorPrice, p.GstRate, cost, p.SellingPrice, p.Mrp,
                 margin, p.SellingPrice == 0 ? 0 : Math.Round(margin * 100 / p.SellingPrice, 1),
                 p.PreviousVendorPrice, p.IsActive, p.IsAvailable, p.IsFeatured, p.VendorPriceChanged, p.Variants, p.Source,
-                p.CommissionPercentOverride, p.SoldCount, p.RatingAverage, p.LastSyncedAt, p.CreatedAt);
+                p.CommissionPercentOverride, p.SoldCount, p.RatingAverage, p.LastSyncedAt, p.CreatedAt, socialStatus.GetValueOrDefault(p.Id));
         }).ToList();
         return new PagedResult<AdminProductRow> { Items = items, Total = total, Page = q.Page, PageSize = pageSize };
     }

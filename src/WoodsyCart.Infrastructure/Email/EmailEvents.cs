@@ -8,7 +8,7 @@ public enum EmailEvent
     DeliveryDateChanged, OrderCancelled, ReturnRequested, RefundProcessed, OrderNote, AccountCreated, EnquiryReceived,
     // To the admin team
     AdminNewOrder, AdminPaymentReceived, AdminUtrSubmitted, AdminUnmatchedPayment, AdminOrderCancelled, AdminReturnRequested,
-    AdminNewEnquiry, AdminNewReview, AdminVendorSync,
+    AdminNewEnquiry, AdminNewReview, AdminVendorSync, AdminSocialProblem,
     // Always sent (not switchable)
     Test, PasswordReset, PasswordChanged
 }
@@ -41,6 +41,7 @@ public static class EmailEvents
         new(nameof(EmailEvent.AdminReturnRequested), "Return requested", "Admin", "A customer asked to return an order."),
         new(nameof(EmailEvent.AdminNewEnquiry), "New enquiry", "Admin", "Contact form and product questions."),
         new(nameof(EmailEvent.AdminNewReview), "Review to approve", "Admin", "A customer wrote a review."),
-        new(nameof(EmailEvent.AdminVendorSync), "Vendor sync report", "Admin", "When a sync fails, or finds price changes or new products.")
+        new(nameof(EmailEvent.AdminVendorSync), "Vendor sync report", "Admin", "When a sync fails, or finds price changes or new products."),
+        new(nameof(EmailEvent.AdminSocialProblem), "Social media problem", "Admin", "An Instagram or Facebook post failed, or the Meta connection stopped working.")
     ];
 }

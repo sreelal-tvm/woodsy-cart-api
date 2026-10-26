@@ -69,7 +69,13 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
         {
             var terms = q.Search.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
             foreach (var t in terms)
-                query = query.Where(p => p.Name.Contains(t) || p.Category!.Name.Contains(t) || (p.Material != null && p.Material.Contains(t)));
+            {
+                // Product codes from Instagram / Facebook captions, e.g. "WC503"
+                if (t.Length > 2 && t.StartsWith("WC", StringComparison.OrdinalIgnoreCase) && int.TryParse(t[2..], out var codeId))
+                    query = query.Where(p => p.Id == codeId);
+                else
+                    query = query.Where(p => p.Name.Contains(t) || p.Category!.Name.Contains(t) || (p.Material != null && p.Material.Contains(t)));
+            }
         }
         if (!string.IsNullOrWhiteSpace(q.Category)) query = query.Where(p => p.Category!.Slug == q.Category);
         if (!string.IsNullOrWhiteSpace(q.Collection)) query = query.Where(p => p.Collections.Any(c => c.Slug == q.Collection));

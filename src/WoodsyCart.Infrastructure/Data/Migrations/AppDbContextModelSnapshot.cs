@@ -2385,6 +2385,167 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.ToTable("ServiceablePincodes");
                 });
 
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.SocialConfig", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("AutoQueueNewProducts")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("AutoQueueSince")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("City")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("ConnectedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("FacebookEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Hashtags")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool>("IncludePrice")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("InstagramEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("InstagramUserId")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("InstagramUsername")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int>("MaxHashtags")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MetaAppId")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("PageId")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("PageName")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("PageTokenProtected")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("PostTimes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("ShowMrp")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Template")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("WhatsApp")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("SocialConfigs");
+                });
+
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.SocialPost", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CaptionOverride")
+                        .HasMaxLength(2200)
+                        .HasColumnType("nvarchar(2200)");
+
+                    b.Property<string>("ContentHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ExternalId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("Permalink")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int>("PhotoCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Platform")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PostedCaption")
+                        .HasMaxLength(2200)
+                        .HasColumnType("nvarchar(2200)");
+
+                    b.Property<string>("PostedSnapshot")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<int>("ProductId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("PublishedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ScheduledAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProductId", "Platform")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "ScheduledAt");
+
+                    b.ToTable("SocialPosts");
+                });
+
             modelBuilder.Entity("WoodsyCart.Domain.Entities.Tag", b =>
                 {
                     b.Property<int>("Id")
@@ -2974,6 +3135,17 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Navigation("Product");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.SocialPost", b =>
+                {
+                    b.HasOne("WoodsyCart.Domain.Entities.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("WoodsyCart.Domain.Entities.VendorBill", b =>

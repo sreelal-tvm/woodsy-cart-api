@@ -45,6 +45,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<PaymentMethodOption> PaymentMethodOptions => Set<PaymentMethodOption>();
     public DbSet<PaymentAlert> PaymentAlerts => Set<PaymentAlert>();
     public DbSet<EmailConfig> EmailConfigs => Set<EmailConfig>();
+    public DbSet<SocialConfig> SocialConfigs => Set<SocialConfig>();
+    public DbSet<SocialPost> SocialPosts => Set<SocialPost>();
     public DbSet<EmailLog> EmailLogs => Set<EmailLog>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
@@ -68,6 +70,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.Description).HasMaxLength(4000);
         });
         b.Entity<Collection>().HasIndex(x => x.Slug).IsUnique();
+        b.Entity<SocialConfig>(e =>
+        {
+            e.Property(x => x.PageTokenProtected).HasMaxLength(2000);
+            e.Property(x => x.Template).HasMaxLength(4000);
+            e.Property(x => x.Hashtags).HasMaxLength(500);
+            e.Property(x => x.PostTimes).HasMaxLength(200);
+        });
+        b.Entity<SocialPost>(e =>
+        {
+            e.HasIndex(x => new { x.ProductId, x.Platform }).IsUnique();
+            e.HasIndex(x => new { x.Status, x.ScheduledAt });
+            e.Property(x => x.CaptionOverride).HasMaxLength(2200);
+            e.Property(x => x.PostedCaption).HasMaxLength(2200);
+            e.Property(x => x.PostedSnapshot).HasMaxLength(4000);
+            e.Property(x => x.ContentHash).HasMaxLength(64);
+            e.Property(x => x.ExternalId).HasMaxLength(100);
+            e.Property(x => x.Permalink).HasMaxLength(500);
+            e.Property(x => x.LastError).HasMaxLength(1000);
+            e.HasOne(x => x.Product).WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+        });
         b.Entity<EmailConfig>(e => { e.Property(x => x.PasswordProtected).HasMaxLength(2000); e.Property(x => x.AdminEmails).HasMaxLength(1000); e.Property(x => x.EventsJson).HasMaxLength(4000); });
         b.Entity<EmailLog>(e => e.HasIndex(x => x.CreatedAt));
 

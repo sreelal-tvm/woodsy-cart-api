@@ -67,6 +67,12 @@ public static class DependencyInjection
         services.AddHostedService<ImageCleaningWorker>();
         services.AddSingleton<BackgroundQueue>();
         services.AddHostedService<BackgroundWorker>();
+
+        // Instagram / Facebook posting (Admin → Social media)
+        services.AddHttpClient("meta", c => c.Timeout = TimeSpan.FromSeconds(60));
+        services.AddScoped<Social.MetaClient>();
+        services.AddScoped<Social.SocialService>();
+        services.AddHostedService<Social.SocialWorker>();
         services.AddScoped<VendorSyncService>();
         services.AddSingleton<SyncProgress>();
         services.AddSingleton<VendorSyncQueue>();
