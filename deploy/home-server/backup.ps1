@@ -18,7 +18,8 @@ New-Item -ItemType Directory -Force "$target\db", "$target\media", "$target\conf
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
 Start-Transcript -Path "$root\logs\backup-$stamp.log" | Out-Null
 try {
-    if ($pingUrl) { try { Invoke-WebRequest "$pingUrl/start" -UseBasicParsing -TimeoutSec 10 | Out-Null } catch {} }
+    # Release backups (-LocalOnly) don't ping: a "start" with no "success" after it reads as a failed nightly backup.
+    if ($pingUrl -and -not $LocalOnly) { try { Invoke-WebRequest "$pingUrl/start" -UseBasicParsing -TimeoutSec 10 | Out-Null } catch {} }
 
     $bak = "$target\db\WoodsyCartDb_$stamp.bak"
     sqlcmd -S $sql -E -C -b -Q "BACKUP DATABASE WoodsyCartDb TO DISK=N'$bak' WITH INIT, CHECKSUM"
