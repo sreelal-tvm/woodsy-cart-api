@@ -12,7 +12,7 @@ import uvicorn  # noqa: E402
 from fastapi import FastAPI, HTTPException  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from cleaner import engine  # noqa: E402
+from cleaner import background, engine  # noqa: E402
 
 app = FastAPI(title="WoodsyCart image cleaner", version="1.0")
 # One photo at a time: OCR and LaMa each use every CPU core, so parallel requests only slow each other down.
@@ -29,9 +29,18 @@ class ProcessRequest(BaseModel):
     maxSize: int = 1200
 
 
+class BackgroundRequest(BaseModel):
+    src: str                       # absolute path of the photo to cut the product out of
+    dst: str                       # where to write the photo on a white background
+    thumb: str | None = None
+    model: str = "fast"            # fast (IS-Net) | detailed (BiRefNet lite)
+    size: int = 1200
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "inpaint": "lama" if os.path.exists(engine.LAMA_PATH) else "opencv"}
+    return {"ok": True, "inpaint": "lama" if os.path.exists(engine.LAMA_PATH) else "opencv",
+            "background": background.available()}
 
 
 @app.post("/process")
@@ -41,6 +50,15 @@ def process(req: ProcessRequest):
     with _busy:
         rep = engine.process(req.src, req.dst, remove=req.remove, recentre=req.recentre, enhance_photo=req.enhance,
                              max_size=req.maxSize, thumb=req.thumb)
+    return rep.to_dict()
+
+
+@app.post("/background")
+def replace_background(req: BackgroundRequest):
+    if not os.path.isfile(req.src):
+        raise HTTPException(404, f"Source not found: {req.src}")
+    with _busy:
+        rep = background.replace(req.src, req.dst, thumb=req.thumb, model=req.model, size=req.size)
     return rep.to_dict()
 
 

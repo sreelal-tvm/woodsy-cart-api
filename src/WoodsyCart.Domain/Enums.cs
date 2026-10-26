@@ -56,6 +56,18 @@ public enum ImageCleanStatus
     Approved = 6        // admin checked the cleaned photo
 }
 
+/// <summary>White-background replacement state of a product photo.</summary>
+public enum BackgroundStatus
+{
+    None = 0,
+    Marked = 1,         // admin marked it (showroom/factory background) for the next batch run
+    Queued = 2,         // waiting for the image cleaner
+    Ready = 3,          // white-background version made — check it in Admin before it goes on the store
+    Applied = 4,        // shown on the store
+    Discarded = 5,      // admin kept the photo as it was
+    Failed = 6
+}
+
 public enum ExpenseCategory
 {
     Marketing = 0, Advertising = 1, Packaging = 2, Delivery = 3, PaymentGatewayFees = 4,

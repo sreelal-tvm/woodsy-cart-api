@@ -32,7 +32,7 @@ public record CleanerReport(
     bool Recentred, bool Enhanced, string Status, string Message);
 
 /// <summary>Talks to the local image cleaner and applies the result to a product photo (keeping the original).</summary>
-public class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpClientFactory http, ILogger<ImageCleaningService> logger,
+public partial class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpClientFactory http, ILogger<ImageCleaningService> logger,
     Microsoft.Extensions.Options.IOptions<ImageCleanerOptions> options)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
@@ -105,6 +105,7 @@ public class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpCli
         var changed = report.Message == "changed" && File.Exists(storage.FullPath(cleanRel));
         img.LocalPath = changed ? cleanRel : img.OriginalPath;
         img.LocalThumbnailPath = changed && File.Exists(storage.FullPath(thumbRel)) ? thumbRel : img.OriginalThumbnailPath;
+        if (img.BackgroundStatus == BackgroundStatus.Applied) img.BackgroundStatus = BackgroundStatus.Ready;
         if (changed) DeleteOtherVersions(stem, cleanRel, thumbRel);
         img.CleanStatus = report.Status switch
         {
@@ -128,6 +129,7 @@ public class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpCli
         img.LocalPath = img.OriginalPath;
         img.LocalThumbnailPath = img.OriginalThumbnailPath;
         img.CleanStatus = ImageCleanStatus.Restored;
+        if (img.BackgroundStatus == BackgroundStatus.Applied) img.BackgroundStatus = BackgroundStatus.Ready;
         await db.SaveChangesAsync();
     }
 
@@ -138,6 +140,7 @@ public class ImageCleaningService(AppDbContext db, FileStorage storage, IHttpCli
         {
             img.LocalPath = latest.Main;
             if (latest.Thumb is not null) img.LocalThumbnailPath = latest.Thumb;
+            if (img.BackgroundStatus == BackgroundStatus.Applied) img.BackgroundStatus = BackgroundStatus.Ready;
         }
         img.CleanStatus = ImageCleanStatus.Approved;
         await db.SaveChangesAsync();

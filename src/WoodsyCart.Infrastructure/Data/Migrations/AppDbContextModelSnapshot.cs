@@ -1913,6 +1913,28 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<DateTime?>("BackgroundAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("BackgroundModel")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("BackgroundNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("BackgroundPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int>("BackgroundStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BackgroundThumbnailPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<string>("CleanReport")
                         .HasMaxLength(4000)
                         .HasColumnType("nvarchar(4000)");
@@ -1970,6 +1992,8 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasColumnType("bigint");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BackgroundStatus");
 
                     b.HasIndex("CleanStatus");
 

@@ -106,6 +106,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.ThumbnailUrl).HasMaxLength(1000);
             e.Property(x => x.CleanReport).HasMaxLength(4000);
             e.HasIndex(x => x.CleanStatus);
+            e.Property(x => x.BackgroundPath).HasMaxLength(500);
+            e.Property(x => x.BackgroundThumbnailPath).HasMaxLength(500);
+            e.Property(x => x.BackgroundModel).HasMaxLength(20);
+            e.Property(x => x.BackgroundNote).HasMaxLength(500);
+            e.HasIndex(x => x.BackgroundStatus);
             e.HasOne(x => x.Product).WithMany(p => p.Images).HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
         });
         b.Entity<ProductOption>(e =>

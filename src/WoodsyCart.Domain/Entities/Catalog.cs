@@ -123,6 +123,14 @@ public class ProductImage : BaseEntity
     public string? OriginalThumbnailPath { get; set; }
     public string? CleanReport { get; set; }
     public DateTime? CleanedAt { get; set; }
+
+    // White-background replacement (a candidate photo; shown on the store only after Admin applies it)
+    public BackgroundStatus BackgroundStatus { get; set; }
+    public string? BackgroundPath { get; set; }
+    public string? BackgroundThumbnailPath { get; set; }
+    public string? BackgroundModel { get; set; }      // fast | detailed
+    public string? BackgroundNote { get; set; }       // why it failed
+    public DateTime? BackgroundAt { get; set; }
 }
 
 public class ProductOption : BaseEntity

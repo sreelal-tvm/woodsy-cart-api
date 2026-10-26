@@ -34,6 +34,19 @@ With `models/lama_fp32.onnx` present, removed areas on rugs, wood and fabric are
 
 The model comes from <https://huggingface.co/Carve/LaMa-ONNX>: 208 MB, Apache-2.0 licence. Put it in the `models` folder and restart the API.
 
+### White background (Admin → Image clean-up → White background)
+
+Cuts the product out of a showroom or factory photo and places it on white with a soft floor shadow
+(`cleaner/background.py`, endpoint `POST /background`). The result waits in Admin until you apply it. Two models,
+both from the rembg project's releases (<https://github.com/danielgatis/rembg/releases/tag/v0.0.0>):
+
+| Model | File | Size | Time per photo (laptop CPU) |
+| --- | --- | --- | --- |
+| fast (IS-Net) | `models/isnet/isnet-general-use.onnx` (download `isnet-general-use.onnx`) | 170 MB | about 6 s |
+| detailed (BiRefNet lite) | `models/birefnet/birefnet-general-lite.onnx` (download `BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx` and rename) | 214 MB | 1–2 min |
+
+The detailed model needs about 1 GB of memory while it runs and is released after each photo.
+
 ## Scan only (no changes)
 
 ```bash

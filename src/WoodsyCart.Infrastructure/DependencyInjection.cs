@@ -65,6 +65,8 @@ public static class DependencyInjection
         services.AddSingleton<ImageCleaningQueue>();
         services.AddHostedService<ImageCleanerHost>();
         services.AddHostedService<ImageCleaningWorker>();
+        services.AddSingleton<BackgroundQueue>();
+        services.AddHostedService<BackgroundWorker>();
         services.AddScoped<VendorSyncService>();
         services.AddSingleton<SyncProgress>();
         services.AddSingleton<VendorSyncQueue>();
