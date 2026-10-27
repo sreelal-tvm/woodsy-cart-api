@@ -43,6 +43,33 @@ public class AdminSocialController(SocialService social) : AdminControllerBase
     public Task<SocialProductDto> Product(int id) => social.ProductAsync(id);
 
     /// <summary>Post products now (up to today's limit; the rest scheduled) or add them to the schedule.</summary>
+    /// <summary>Makes the product's reel (about 20–60 seconds the first time) and returns its address.</summary>
+    [HttpPost("products/{id:int}/reel")]
+    public Task<ReelFile> MakeReel(int id, bool music = true) => social.MakeReelAsync(id, music);
+
+    /// <summary>The reel as a download (made first if needed).</summary>
+    [HttpGet("products/{id:int}/reel/file")]
+    public async Task<IActionResult> ReelFile(int id, bool music = true)
+    {
+        var r = await social.MakeReelAsync(id, music);
+        return PhysicalFile(social.ReelPath(r), "video/mp4", $"woodsycart-{id}-reel{(r.Track is null ? "" : "-music")}.mp4");
+    }
+
+    [HttpGet("music")]
+    public List<SocialMusicTrack> Music() => social.Music();
+
+    [HttpPost("music")]
+    [RequestSizeLimit(25_000_000)]
+    public async Task<List<SocialMusicTrack>> AddMusic(IFormFile file)
+    {
+        if (file.Length > 20_000_000) throw new AppException("Music files can be at most 20 MB.");
+        await using var stream = file.OpenReadStream();
+        return await social.AddMusicAsync(stream, file.FileName);
+    }
+
+    [HttpDelete("music/{name}")]
+    public List<SocialMusicTrack> DeleteMusic(string name) => social.DeleteMusic(name);
+
     [HttpPost("queue")]
     public Task<SocialQueueResult> Queue(SocialQueueRequest r)
     {

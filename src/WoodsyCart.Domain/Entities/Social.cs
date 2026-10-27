@@ -30,6 +30,11 @@ public class SocialConfig : BaseEntity
     public string? ThreadsTemplate { get; set; }          // null = built-in short template (Threads allows 500 characters)
     public string? ThreadsTopic { get; set; } = "Furniture";   // Threads allows one topic tag per post
 
+    // Reels: a short video made from the product's photos, posted to Instagram and the Facebook Page at their own times
+    public bool ReelsEnabled { get; set; }
+    public string ReelTimes { get; set; } = "18:00";       // India time, one reel per time
+    public bool ReelMusic { get; set; } = true;            // use an uploaded track (none uploaded = no music)
+
     // Caption
     public string? Template { get; set; }                 // null = built-in template
     public bool IncludePrice { get; set; } = true;

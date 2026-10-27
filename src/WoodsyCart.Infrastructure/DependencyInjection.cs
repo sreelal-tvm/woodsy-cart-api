@@ -72,6 +72,7 @@ public static class DependencyInjection
         services.AddHttpClient("meta", c => c.Timeout = TimeSpan.FromSeconds(60));
         services.AddScoped<Social.MetaClient>();
         services.AddScoped<Social.ThreadsClient>();
+        services.AddScoped<Social.ReelMaker>();
         services.AddScoped<Social.SocialService>();
         services.AddHostedService<Social.SocialWorker>();
         services.AddScoped<VendorSyncService>();

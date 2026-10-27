@@ -2454,6 +2454,17 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<bool>("ReelMusic")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ReelTimes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("ReelsEnabled")
+                        .HasColumnType("bit");
+
                     b.Property<bool>("ShowMrp")
                         .HasColumnType("bit");
 

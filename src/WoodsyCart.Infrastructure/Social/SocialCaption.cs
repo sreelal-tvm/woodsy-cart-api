@@ -150,6 +150,40 @@ public static partial class SocialCaption
 
     public static string Code(int productId) => $"WC{productId}";
 
+    /// <summary>The words on the reel's slides (short: they are read in a few seconds each).</summary>
+    public static ReelScript Reel(Product p, SocialConfig cfg, BusinessSettings biz)
+    {
+        var inr = CultureInfo.GetCultureInfo("en-IN");
+        string Money(decimal v) => "₹" + v.ToString("#,##0", inr);
+        var variants = p.Variants.Where(v => v.IsActive && v.IsAvailable).ToList();
+        var price = p.OfferPrice ?? p.SellingPrice;
+        var hasRange = variants.Count > 1 && variants.Select(v => v.OfferPrice ?? v.SellingPrice).Distinct().Count() > 1;
+        var shown = hasRange ? Math.Min(variants.Min(v => v.OfferPrice ?? v.SellingPrice), price) : price;
+        var showMrp = cfg.IncludePrice && cfg.ShowMrp && !hasRange && p.Mrp > shown;
+
+        var colours = p.Options.Where(o => o.IsColour).SelectMany(o => o.Values.Where(v => !v.IsHidden).OrderBy(v => v.SortOrder).Select(v => v.Value.Trim()))
+            .Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var facts = new List<string>();
+        if (colours.Count > 0) facts.Add((colours.Count == 1 ? "Colour: " : "Colours: ") + string.Join(", ", colours.Take(4)));
+        if (Clean(p.Dimensions) is { } d) facts.Add("Size: " + SizePrefix().Replace(d, "").Trim());
+        if (Clean(p.Material) is { } m) facts.Add(Sentence(MadeOfPrefix().Replace(m, "").Trim()));
+        if (Clean(p.Warranty) is { } w) facts.Add(Sentence(w));
+        foreach (var o in p.Options.Where(o => !o.IsColour).OrderBy(o => o.Position))
+        {
+            var vals = o.Values.Where(v => !v.IsHidden).OrderBy(v => v.SortOrder).Select(v => v.Value.Trim()).Where(v => v.Length > 0).Distinct().ToList();
+            if (vals.Count > 1) facts.Add($"{o.Name}: {string.Join(", ", vals.Take(4))}");
+        }
+        if (p.DeliveryDays > 0) facts.Add(p.AssemblyIncluded ? $"Delivered & assembled in {p.DeliveryDays} days" : $"Delivered in {p.DeliveryDays} days");
+
+        var website = Clean(biz.Website) is { } site ? SchemePrefix().Replace(site, "").TrimEnd('/') : "woodsycart.com";
+        var phone = Phone(cfg.WhatsApp ?? biz.WhatsApp);
+        return new ReelScript(p.Name.Trim(),
+            cfg.IncludePrice ? (hasRange ? "From " : "") + Money(shown) : null,
+            showMrp ? Money(p.Mrp) : null, showMrp ? Money(p.Mrp - shown) : null,
+            p.OfferPrice is not null ? Clean(p.Offer?.Name) : null,
+            facts, website, phone.Length > 0 ? phone : null, Code(p.Id), Clean(biz.Tagline));
+    }
+
     /// <summary>Length as Threads counts it: emojis and symbols such as ₹ by their UTF-8 bytes.</summary>
     public static int ThreadsLength(string s) => Encoding.UTF8.GetByteCount(s);
 

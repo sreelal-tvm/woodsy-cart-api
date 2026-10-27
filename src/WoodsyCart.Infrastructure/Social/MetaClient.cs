@@ -20,7 +20,8 @@ public record PublishResult(string Id, string? Permalink);
 /// </summary>
 public class MetaClient(IHttpClientFactory http, IConfiguration config)
 {
-    private string Base => $"https://graph.facebook.com/{config["Social:GraphVersion"] ?? "v23.0"}/";
+    private string Version => config["Social:GraphVersion"] ?? "v23.0";
+    private string Base => $"https://graph.facebook.com/{Version}/";
     private HttpClient Client => http.CreateClient("meta");
 
     // ---------- Connecting ----------
@@ -77,9 +78,23 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         return new PublishResult(id, link);
     }
 
-    private async Task WaitReadyAsync(string containerId, string token, CancellationToken ct)
+    /// <summary>A reel (MP4 at a public address) with its cover image; shown in the feed as well as the Reels tab.</summary>
+    public async Task<PublishResult> PublishInstagramReelAsync(string igId, string token, string videoUrl, string coverUrl, string caption, CancellationToken ct = default)
     {
-        for (var i = 0; i < 40; i++)
+        var container = await PostIdAsync($"{igId}/media", token, new()
+        {
+            ["media_type"] = "REELS", ["video_url"] = videoUrl, ["cover_url"] = coverUrl, ["caption"] = caption, ["share_to_feed"] = "true"
+        }, ct);
+        await WaitReadyAsync(container, token, ct, attempts: 120);   // videos take longer than photos to process
+        var id = await PostIdAsync($"{igId}/media_publish", token, new() { ["creation_id"] = container }, ct);
+        string? link = null;
+        try { link = (await GetAsync($"{id}?fields=permalink", token, ct)).GetProperty("permalink").GetString(); } catch (MetaException) { }
+        return new PublishResult(id, link);
+    }
+
+    private async Task WaitReadyAsync(string containerId, string token, CancellationToken ct, int attempts = 40)
+    {
+        for (var i = 0; i < attempts; i++)
         {
             var status = (await GetAsync($"{containerId}?fields=status_code", token, ct)).GetProperty("status_code").GetString();
             if (status is "FINISHED" or "PUBLISHED") return;
@@ -102,6 +117,35 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         string? link = null;
         try { link = (await GetAsync($"{id}?fields=permalink_url", token, ct)).GetProperty("permalink_url").GetString(); } catch (MetaException) { }
         return new PublishResult(id, link);
+    }
+
+    /// <summary>A Facebook Page reel: start an upload, let Facebook fetch the MP4 from its public address, then publish.
+    /// Facebook allows 30 reels through the API per 24 hours.</summary>
+    public async Task<PublishResult> PublishFacebookReelAsync(string pageId, string token, string videoUrl, string description, CancellationToken ct = default)
+    {
+        var videoId = (await PostAsync($"{pageId}/video_reels", token, new() { ["upload_phase"] = "start" }, ct)).GetProperty("video_id").GetString()!;
+        using (var req = new HttpRequestMessage(HttpMethod.Post, $"https://rupload.facebook.com/video-upload/{Version}/{videoId}"))
+        {
+            req.Headers.TryAddWithoutValidation("Authorization", "OAuth " + token);
+            req.Headers.TryAddWithoutValidation("file_url", videoUrl);
+            using var res = await Client.SendAsync(req, ct);
+            await ReadAsync(res, ct);
+        }
+        await PostAsync($"{pageId}/video_reels", token, new()
+        {
+            ["video_id"] = videoId, ["upload_phase"] = "finish", ["video_state"] = "PUBLISHED", ["description"] = description
+        }, ct);
+        // Wait for Facebook to process it (a failure shows up here); still processing after a few minutes = it will finish on its own
+        for (var i = 0; i < 60; i++)
+        {
+            var status = (await GetAsync($"{videoId}?fields=status", token, ct)).GetProperty("status");
+            var state = status.TryGetProperty("video_status", out var v) ? v.GetString() : null;
+            if (state is "ready") break;
+            if (state is "error" or "upload_failed" or "expired")
+                throw new MetaException($"Facebook could not process the reel ({state}).");
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+        }
+        return new PublishResult(videoId, $"https://www.facebook.com/reel/{videoId}");
     }
 
     /// <summary>Changes the text of a Page post made by this app (photos can't be changed).</summary>
