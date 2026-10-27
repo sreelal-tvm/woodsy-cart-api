@@ -305,11 +305,15 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                     ? "Instagram's daily limit is used up, so all of them were scheduled instead."
                     : $"Only {room} more can be posted in the next 24 hours (Instagram's limit); the rest were scheduled.";
         }
-        var slots = await FreeSlotsAsync(c, work.Count - nowCount);
+        // A product already waiting in the queue on another platform (e.g. added to Threads later) goes out at that same time
+        var waiting = existing.Where(s => s.Status == SocialPostStatus.Queued && s.ScheduledAt is not null)
+            .GroupBy(s => s.ProductId).ToDictionary(g => g.Key, g => g.Min(s => s.ScheduledAt!.Value));
+        var slots = await FreeSlotsAsync(c, work.Skip(nowCount).Count(w => !waiting.ContainsKey(w.ProductId)));
         var at = DateTime.UtcNow;
+        var nextSlot = 0;
         for (var i = 0; i < work.Count; i++)
         {
-            var when = i < nowCount ? at : slots[i - nowCount];
+            var when = i < nowCount ? at : waiting.TryGetValue(work[i].ProductId, out var t) ? t : slots[nextSlot++];
             foreach (var pl in work[i].Platforms)
             {
                 var s = existing.FirstOrDefault(x => x.ProductId == work[i].ProductId && x.Platform == pl);
@@ -318,6 +322,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             }
         }
         await db.SaveChangesAsync();
+        var joined = work.Skip(nowCount).Count(w => waiting.ContainsKey(w.ProductId));
+        if (joined > 0) note = (note is null ? "" : note + " ") + $"{joined} already in the queue on another platform will post at that same time.";
         return new SocialQueueResult(work.Count, nowCount, work.Count - nowCount, skipped, slots.Count > 0 ? slots[0] : null, note);
     }
 
