@@ -17,9 +17,13 @@ public record SocialSettingsDto(
     bool Connected, string? MetaAppId, string? PageId, string? PageName, string? InstagramUserId, string? InstagramUsername, DateTime? ConnectedAt,
     bool InstagramEnabled, bool FacebookEnabled, string Template, bool CustomTemplate, string DefaultTemplate, string[] Tokens,
     bool IncludePrice, bool ShowMrp, string? WhatsApp, string? City, string? Hashtags, int MaxHashtags, string PostTimes,
-    bool AutoQueueNewProducts, bool PublicPhotos);
+    bool AutoQueueNewProducts, bool PublicPhotos,
+    bool ThreadsConnected, string? ThreadsAppId, string? ThreadsUsername, DateTime? ThreadsConnectedAt, DateTime? ThreadsTokenExpiresAt,
+    bool ThreadsEnabled, string ThreadsTemplate, bool ThreadsCustomTemplate, string ThreadsDefaultTemplate, string? ThreadsTopic, string? ThreadsCallbackUrl);
 public record SocialSettingsUpdate(bool InstagramEnabled, bool FacebookEnabled, string? Template, bool IncludePrice, bool ShowMrp,
-    string? WhatsApp, string? City, string? Hashtags, int MaxHashtags, string PostTimes, bool AutoQueueNewProducts);
+    string? WhatsApp, string? City, string? Hashtags, int MaxHashtags, string PostTimes, bool AutoQueueNewProducts,
+    bool ThreadsEnabled = true, string? ThreadsTemplate = null, string? ThreadsTopic = "Furniture");
+public record ThreadsConnectRequest(string AppId, string AppSecret);
 public record SocialConnectRequest(string AppId, string AppSecret, string UserToken, string? PageId);
 public record SocialPageChoice(string Id, string Name, string? Instagram);
 public record SocialConnectResult(bool Connected, List<SocialPageChoice>? Pages, string? Message);
@@ -27,17 +31,18 @@ public record SocialQueueRequest(List<int> ProductIds, bool Now = false, List<So
 public record SocialQueueResult(int Products, int PostingNow, int Scheduled, int Skipped, DateTime? FirstSlot, string? Note);
 public record SocialPlatformState(SocialPlatform Platform, bool Enabled, int? PostId, SocialPostStatus? Status, DateTime? ScheduledAt,
     DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, string? PostedCaption, bool CustomCaption);
-public record SocialProductDto(int ProductId, string Caption, string Code, List<string> Photos, bool Connected, bool Publishable, List<SocialPlatformState> Platforms);
+public record SocialProductDto(int ProductId, string Caption, string Code, List<string> Photos, bool Connected, bool Publishable, List<SocialPlatformState> Platforms,
+    string ThreadsCaption);
 public record SocialPostRow(int Id, int ProductId, string ProductName, string? Image, SocialPlatform Platform, SocialPostStatus Status,
     DateTime? ScheduledAt, DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, bool CustomCaption);
 public record SocialQuota(SocialPlatform Platform, int Used, int Limit, bool FromMeta);
 
 /// <summary>
-/// Posts products to Instagram and the Facebook Page: one post per product per platform, at a steady pace (Admin → Social
-/// media). Facebook posts follow product changes automatically; Instagram can't edit captions through the API, so a
-/// changed product is marked "out of date" for the admin to copy the new caption or replace the post.
+/// Posts products to Instagram, the Facebook Page and Threads: one post per product per platform, at a steady pace (Admin →
+/// Social media). Facebook posts follow product changes automatically; Instagram and Threads can't edit posts through the
+/// API, so a changed product is marked "out of date" for the admin to copy the new caption or replace the post.
 /// </summary>
-public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProvider dp, FileStorage storage, IMemoryCache cache,
+public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threads, IDataProtectionProvider dp, FileStorage storage, IMemoryCache cache,
     IOptions<SmtpOptions> urls, EmailSender email, ILogger<SocialService> logger)
 {
     public const int PhotoWidth = 1080, PhotoHeight = 1350;     // 4:5 portrait: the most screen space in the feed
@@ -64,7 +69,10 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         return new SocialSettingsDto(IsConnected(c), c.MetaAppId, c.PageId, c.PageName, c.InstagramUserId, c.InstagramUsername, c.ConnectedAt,
             c.InstagramEnabled, c.FacebookEnabled, c.Template ?? SocialCaption.DefaultTemplate, c.Template is not null, SocialCaption.DefaultTemplate,
             SocialCaption.Tokens, c.IncludePrice, c.ShowMrp, c.WhatsApp, c.City, c.Hashtags, c.MaxHashtags, c.PostTimes, c.AutoQueueNewProducts,
-            PublicBase() is not null);
+            PublicBase() is not null,
+            ThreadsConnected(c), c.ThreadsAppId, c.ThreadsUsername, c.ThreadsConnectedAt, c.ThreadsTokenExpiresAt, c.ThreadsEnabled,
+            c.ThreadsTemplate ?? SocialCaption.DefaultThreadsTemplate, c.ThreadsTemplate is not null, SocialCaption.DefaultThreadsTemplate,
+            c.ThreadsTopic, ThreadsCallback());
     }
 
     public async Task SaveSettingsAsync(SocialSettingsUpdate r)
@@ -74,12 +82,19 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         if (r.MaxHashtags is < 1 or > 30) throw new AppException("Hashtags per post must be between 1 and 30 (Instagram allows 30; 3–5 work best).");
         var template = string.IsNullOrWhiteSpace(r.Template) || r.Template.Replace("\r", "").Trim() == SocialCaption.DefaultTemplate.Trim() ? null : r.Template.Trim();
         if (template is not null && !template.Contains("{name}")) throw new AppException("The caption template must contain {name}.");
+        var threadsTemplate = string.IsNullOrWhiteSpace(r.ThreadsTemplate) || r.ThreadsTemplate.Replace("\r", "").Trim() == SocialCaption.DefaultThreadsTemplate.Trim()
+            ? null : r.ThreadsTemplate.Trim();
+        if (threadsTemplate is not null && !threadsTemplate.Contains("{name}")) throw new AppException("The Threads template must contain {name}.");
+        var topic = Clean(r.ThreadsTopic)?.TrimStart('#');
+        if (topic is { Length: > 50 } || topic?.IndexOfAny(['.', '&']) >= 0)
+            throw new AppException("The Threads topic can be at most 50 characters, without full stops or &.");
         var c = await ConfigAsync();
         if (r.AutoQueueNewProducts && !c.AutoQueueNewProducts) c.AutoQueueSince = DateTime.UtcNow;
         c.InstagramEnabled = r.InstagramEnabled; c.FacebookEnabled = r.FacebookEnabled; c.Template = template;
         c.IncludePrice = r.IncludePrice; c.ShowMrp = r.ShowMrp; c.WhatsApp = Clean(r.WhatsApp); c.City = Clean(r.City); c.Hashtags = Clean(r.Hashtags);
         c.MaxHashtags = r.MaxHashtags; c.PostTimes = string.Join(",", times.Select(t => t.ToString(@"hh\:mm")));
         c.AutoQueueNewProducts = r.AutoQueueNewProducts;
+        c.ThreadsEnabled = r.ThreadsEnabled; c.ThreadsTemplate = threadsTemplate; c.ThreadsTopic = topic;
         await db.SaveChangesAsync();
     }
 
@@ -114,14 +129,88 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         await db.SaveChangesAsync();
     }
 
+    /// <summary>Step 1 of connecting Threads: remembers the app ID and secret for 15 minutes (in memory only) and returns
+    /// the Threads login address. Threads sends the browser back to <see cref="ThreadsCallbackAsync"/>.</summary>
+    public string StartThreads(ThreadsConnectRequest r)
+    {
+        if (string.IsNullOrWhiteSpace(r.AppId) || string.IsNullOrWhiteSpace(r.AppSecret))
+            throw new AppException("Enter the Threads app ID and Threads app secret (Meta app → App settings → Basic).");
+        var callback = ThreadsCallback() ?? throw new AppException("Threads needs the API's public https address (Smtp:ApiUrl).");
+        var state = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+        cache.Set(ThreadsStateKey + state, (r.AppId.Trim(), r.AppSecret.Trim()), TimeSpan.FromMinutes(15));
+        return ThreadsClient.AuthorizeUrl(r.AppId.Trim(), callback, state);
+    }
+
+    /// <summary>Step 2: Threads' redirect. Swaps the code for a 60-day token and returns where to send the browser in Admin.</summary>
+    public async Task<string> ThreadsCallbackAsync(string? code, string? state, string? error)
+    {
+        string Back(string query) => $"{email.AdminUrl}/social?tab=settings&{query}";
+        if (!string.IsNullOrEmpty(error)) return Back("threads=cancelled");
+        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state) || !cache.TryGetValue(ThreadsStateKey + state, out (string AppId, string Secret) app))
+            return Back("threads=expired");
+        cache.Remove(ThreadsStateKey + state);
+        try
+        {
+            var (token, userId, username) = await threads.ConnectAsync(app.AppId, app.Secret, ThreadsCallback()!, code.Split('#')[0]);
+            var c = await ConfigAsync();
+            c.ThreadsAppId = app.AppId; c.ThreadsUserId = userId; c.ThreadsUsername = username;
+            c.ThreadsTokenProtected = _protector.Protect(token.Token); c.ThreadsTokenExpiresAt = token.ExpiresAt;
+            c.ThreadsTokenRefreshedAt = DateTime.UtcNow; c.ThreadsConnectedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            return Back("threads=connected");
+        }
+        catch (Exception ex) when (ex is MetaException or HttpRequestException)
+        {
+            logger.LogWarning("Connecting Threads failed: {Message}", ex.Message);
+            return Back("threads=failed&reason=" + Uri.EscapeDataString(ex.Message));
+        }
+    }
+
+    public async Task DisconnectThreadsAsync()
+    {
+        var c = await ConfigAsync();
+        c.ThreadsTokenProtected = null; c.ThreadsConnectedAt = null; c.ThreadsTokenExpiresAt = null;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Threads tokens last 60 days: get a fresh one weekly (worker). An expired token can only be replaced by connecting again.</summary>
+    public async Task RefreshThreadsTokenAsync(CancellationToken ct)
+    {
+        var c = await ConfigAsync();
+        if (!ThreadsConnected(c) || c.ThreadsTokenRefreshedAt > DateTime.UtcNow.AddDays(-7)) return;
+        try
+        {
+            var t = await threads.RefreshAsync(ThreadsToken(c), ct);
+            c.ThreadsTokenProtected = _protector.Protect(t.Token); c.ThreadsTokenExpiresAt = t.ExpiresAt; c.ThreadsTokenRefreshedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is MetaException or HttpRequestException)
+        {
+            c.ThreadsTokenRefreshedAt = DateTime.UtcNow.AddDays(-6);   // try again tomorrow
+            await db.SaveChangesAsync(ct);
+            logger.LogWarning("Refreshing the Threads token failed: {Message}", ex.Message);
+            if (ex is MetaException { TokenInvalid: true } || c.ThreadsTokenExpiresAt < DateTime.UtcNow.AddDays(7))
+                await NotifyAsync("Threads needs connecting again",
+                    $"<p>WoodsyCart couldn't renew its Threads access ({System.Net.WebUtility.HtmlEncode(ex.Message)}). It runs out on {c.ThreadsTokenExpiresAt:d MMM yyyy}.</p><p>Connect Threads again in Admin → Social media → Settings.</p>");
+        }
+    }
+
+    private const string ThreadsStateKey = "social:threads-state:";
+    private string? ThreadsCallback() => PublicBase() is { } b ? b + "/api/social/threads/callback" : null;
+
+    /// <summary>Facebook Page (and Instagram) connected.</summary>
     private static bool IsConnected(SocialConfig c) => c.PageTokenProtected is not null && c.PageId is not null;
+    private static bool ThreadsConnected(SocialConfig c) => c.ThreadsTokenProtected is not null && c.ThreadsUserId is not null;
+    private static bool AnyConnected(SocialConfig c) => IsConnected(c) || ThreadsConnected(c);
     private string Token(SocialConfig c) => _protector.Unprotect(c.PageTokenProtected!);
+    private string ThreadsToken(SocialConfig c) => _protector.Unprotect(c.ThreadsTokenProtected!);
 
     private static List<SocialPlatform> Enabled(SocialConfig c)
     {
         var list = new List<SocialPlatform>();
-        if (c.InstagramEnabled && c.InstagramUserId is not null) list.Add(SocialPlatform.Instagram);
-        if (c.FacebookEnabled && c.PageId is not null) list.Add(SocialPlatform.Facebook);
+        if (c.InstagramEnabled && IsConnected(c) && c.InstagramUserId is not null) list.Add(SocialPlatform.Instagram);
+        if (c.FacebookEnabled && IsConnected(c)) list.Add(SocialPlatform.Facebook);
+        if (c.ThreadsEnabled && ThreadsConnected(c)) list.Add(SocialPlatform.Threads);
         return list;
     }
 
@@ -137,8 +226,9 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         .Where(i => i.MediaType == MediaType.Image && i.LocalPath != null)
         .OrderBy(i => i.VariantId != null).ThenBy(i => i.SortOrder).ThenBy(i => i.Id).Select(i => i.LocalPath!).Take(SocialCaption.MaxPhotos).ToList();
 
-    private async Task<PostContent> ContentAsync(Product p, SocialConfig c, string? overrideCaption, BusinessSettings? biz = null) =>
-        SocialCaption.Build(p, c, biz ?? await db.BusinessSettings.AsNoTracking().FirstAsync(), overrideCaption, Photos(p));
+    private async Task<PostContent> ContentAsync(Product p, SocialConfig c, string? overrideCaption, SocialPlatform platform, BusinessSettings? biz = null) =>
+        SocialCaption.Build(p, c, biz ?? await db.BusinessSettings.AsNoTracking().FirstAsync(), overrideCaption, Photos(p),
+            platform == SocialPlatform.Threads, email.StorefrontUrl);
 
     public async Task<SocialProductDto> ProductAsync(int productId)
     {
@@ -148,18 +238,23 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         var c = await ConfigAsync();
         var posts = await db.SocialPosts.AsNoTracking().Where(s => s.ProductId == productId).ToListAsync();
         var biz = await db.BusinessSettings.AsNoTracking().FirstAsync();
-        var plain = await ContentAsync(p, c, null, biz);
+        var plain = await ContentAsync(p, c, null, SocialPlatform.Instagram, biz);
+        var threadsPlain = await ContentAsync(p, c, null, SocialPlatform.Threads, biz);
         var enabled = Enabled(c);
-        var platforms = new[] { SocialPlatform.Instagram, SocialPlatform.Facebook }.Select(pl =>
+        var shown = new List<SocialPlatform> { SocialPlatform.Instagram, SocialPlatform.Facebook };
+        if (ThreadsConnected(c) || posts.Any(x => x.Platform == SocialPlatform.Threads)) shown.Add(SocialPlatform.Threads);
+        var platforms = shown.Select(pl =>
         {
             var s = posts.FirstOrDefault(x => x.Platform == pl);
-            var now = s?.CaptionOverride is null ? plain : SocialCaption.Build(p, c, biz, s.CaptionOverride, plain.Photos);
+            var basic = pl == SocialPlatform.Threads ? threadsPlain : plain;
+            var now = s?.CaptionOverride is null ? basic
+                : SocialCaption.Build(p, c, biz, s.CaptionOverride, plain.Photos, pl == SocialPlatform.Threads, email.StorefrontUrl);
             var changes = s is { Status: SocialPostStatus.OutOfDate } ? SocialCaption.Changes(s.PostedSnapshot, now.Snapshot) : [];
             return new SocialPlatformState(pl, enabled.Contains(pl), s?.Id, s?.Status, s?.ScheduledAt, s?.PublishedAt, s?.Permalink, s?.LastError,
                 changes, s?.PostedCaption, s?.CaptionOverride is not null);
         }).ToList();
-        return new SocialProductDto(p.Id, plain.Caption, SocialCaption.Code(p.Id), plain.Photos, IsConnected(c),
-            p.IsActive && plain.Photos.Count > 0, platforms);
+        return new SocialProductDto(p.Id, plain.Caption, SocialCaption.Code(p.Id), plain.Photos, AnyConnected(c),
+            p.IsActive && plain.Photos.Count > 0, platforms, threadsPlain.Caption);
     }
 
     /// <summary>The caption the post should have now (custom caption if one was saved).</summary>
@@ -167,7 +262,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
     {
         var s = await db.SocialPosts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == postId) ?? throw new AppException("Post not found", 404);
         var p = await WithDetails().FirstAsync(x => x.Id == s.ProductId);
-        return (await ContentAsync(p, await ConfigAsync(), s.CaptionOverride)).Caption;
+        return (await ContentAsync(p, await ConfigAsync(), s.CaptionOverride, s.Platform)).Caption;
     }
 
     // ---------- Queue ----------
@@ -177,9 +272,9 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
     public async Task<SocialQueueResult> QueueAsync(SocialQueueRequest r)
     {
         var c = await ConfigAsync();
-        if (!IsConnected(c)) throw new AppException("Connect Instagram and Facebook first (Social media → Settings).");
+        if (!AnyConnected(c)) throw new AppException("Connect Instagram and Facebook, or Threads, first (Social media → Settings).");
         var platforms = Enabled(c).Where(p => r.Platforms is null || r.Platforms.Contains(p)).ToList();
-        if (platforms.Count == 0) throw new AppException("Switch on Instagram or Facebook in Social media settings.");
+        if (platforms.Count == 0) throw new AppException("Switch on Instagram, Facebook or Threads in Social media settings.");
 
         var ids = r.ProductIds.Distinct().ToList();
         var products = await db.Products.AsNoTracking().Where(p => ids.Contains(p.Id))
@@ -300,12 +395,14 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         if (s.ExternalId is not null)
         {
             var c = await ConfigAsync();
-            if (!IsConnected(c)) throw new AppException("Connect Instagram and Facebook in Settings first.");
-            try { await meta.DeleteAsync(s.ExternalId, Token(c)); }
+            if (!(s.Platform == SocialPlatform.Threads ? ThreadsConnected(c) : IsConnected(c))) throw new AppException($"Connect {s.Platform} in Settings first.");
+            try { await DeleteExternalAsync(s, c); }
             catch (MetaException ex) when (ex.Code is 100) { }   // already deleted in the app
-            catch (MetaException ex) when (ex.Code is 10 or 200 && s.Platform == SocialPlatform.Instagram)
+            catch (MetaException ex) when (ex.Code is 10 or 200 && s.Platform is SocialPlatform.Instagram or SocialPlatform.Threads)
             {
-                throw new AppException("Instagram needs the instagram_manage_contents permission to delete posts. Add it to the Meta app, then reconnect in Settings with a new token.");
+                throw new AppException(s.Platform == SocialPlatform.Instagram
+                    ? "Instagram needs the instagram_manage_contents permission to delete posts. Add it to the Meta app, then reconnect in Settings with a new token."
+                    : "Threads needs the threads_delete permission to delete posts. Add it to the Threads use case, then connect Threads again.");
             }
             catch (MetaException ex) { throw new AppException($"Couldn't delete the {s.Platform} post: " + ex.Message); }
         }
@@ -320,7 +417,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         if (s.Status != SocialPostStatus.Failed) throw new AppException("Only failed posts can be retried.");
         var c = await ConfigAsync();
         s.Status = SocialPostStatus.Queued; s.LastError = null;
-        s.ScheduledAt = s.Platform == SocialPlatform.Facebook || await RoomNowAsync(c, [SocialPlatform.Instagram]) > 0
+        s.ScheduledAt = s.Platform != SocialPlatform.Instagram || await RoomNowAsync(c, [SocialPlatform.Instagram]) > 0
             ? DateTime.UtcNow : (await FreeSlotsAsync(c, 1))[0];
         await db.SaveChangesAsync();
     }
@@ -331,6 +428,8 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         var s = await Post(postId);
         s.CaptionOverride = string.IsNullOrWhiteSpace(caption) ? null : caption.Trim();
         if (s.CaptionOverride?.Length > SocialCaption.MaxLength) throw new AppException($"Captions can be at most {SocialCaption.MaxLength} characters.");
+        if (s.Platform == SocialPlatform.Threads && s.CaptionOverride is not null && SocialCaption.ThreadsLength(s.CaptionOverride) > SocialCaption.ThreadsMaxLength)
+            throw new AppException($"Threads allows {SocialCaption.ThreadsMaxLength} characters (emojis and ₹ count as 3–4). Shorten the text.");
         await db.SaveChangesAsync();
         if (s.Platform == SocialPlatform.Facebook && Live.Contains(s.Status)) await RefreshAsync([s.ProductId]);
     }
@@ -341,7 +440,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         var s = await Post(postId);
         if (!Live.Contains(s.Status)) throw new AppException("This post isn't live.");
         var p = await WithDetails().FirstAsync(x => x.Id == s.ProductId);
-        Apply(s, await ContentAsync(p, await ConfigAsync(), s.CaptionOverride));
+        Apply(s, await ContentAsync(p, await ConfigAsync(), s.CaptionOverride, s.Platform));
         s.Status = SocialPostStatus.Published;
         await db.SaveChangesAsync();
     }
@@ -356,7 +455,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
             throw new AppException("Instagram's daily limit is used up. Replace the post tomorrow.");
         if (s.ExternalId is not null)
         {
-            try { await meta.DeleteAsync(s.ExternalId, Token(c)); }
+            try { await DeleteExternalAsync(s, c); }
             catch (MetaException ex) when (ex.Code is not 190) { throw new AppException("Couldn't delete the old post: " + ex.Message); }
         }
         s.Status = SocialPostStatus.Queued; s.ScheduledAt = DateTime.UtcNow; s.ExternalId = null; s.Permalink = null; s.PublishedAt = null;
@@ -388,7 +487,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
             var pids = outdated.Select(r => r.Post.ProductId).Distinct().ToList();
             foreach (var p in await WithDetails().Where(p => pids.Contains(p.Id)).ToListAsync())
                 foreach (var r in outdated.Where(o => o.Post.ProductId == p.Id))
-                    changes[r.Post.Id] = SocialCaption.Changes(r.Post.PostedSnapshot, (await ContentAsync(p, c, r.Post.CaptionOverride, biz)).Snapshot);
+                    changes[r.Post.Id] = SocialCaption.Changes(r.Post.PostedSnapshot, (await ContentAsync(p, c, r.Post.CaptionOverride, r.Post.Platform, biz)).Snapshot);
         }
         return new PagedResult<SocialPostRow>
         {
@@ -410,7 +509,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         var publishable = await db.Products.CountAsync(p => p.IsActive && p.Images.Any(i => i.MediaType == MediaType.Image && i.LocalPath != null));
         return new
         {
-            connected = IsConnected(c), instagram = c.InstagramUsername, page = c.PageName,
+            connected = AnyConnected(c), instagram = c.InstagramUsername, page = c.PageName, threads = ThreadsConnected(c) ? c.ThreadsUsername : null,
             enabled = Enabled(c), quota = await QuotaAsync(c), facebookLast24h = fb24, nextPostAt = next,
             postedProducts, notPosted = Math.Max(0, publishable - postedProducts),
             counts = counts.GroupBy(x => x.Platform.ToString()).ToDictionary(g => g.Key, g => g.ToDictionary(x => x.Status.ToString(), x => x.Count))
@@ -429,7 +528,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
     public async Task<int> PublishDueAsync(CancellationToken ct)
     {
         var c = await ConfigAsync();
-        if (!IsConnected(c)) return 0;
+        if (!AnyConnected(c)) return 0;
         // A post interrupted mid-way (API restart) may or may not be on Instagram: don't post it twice automatically.
         var stuck = await db.SocialPosts.Where(s => s.Status == SocialPostStatus.Publishing && s.UpdatedAt < DateTime.UtcNow.AddMinutes(-15)).ToListAsync(ct);
         foreach (var s in stuck) { s.Status = SocialPostStatus.Failed; s.LastError = "Interrupted while posting. Check the account before retrying, so it isn't posted twice."; }
@@ -467,8 +566,24 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
                 return;
             }
         }
+        if (s.Platform == SocialPlatform.Threads)
+        {
+            try
+            {
+                var (used, limit) = await threads.QuotaAsync(c.ThreadsUserId!, ThreadsToken(c), ct);
+                if (used >= limit)
+                {
+                    s.ScheduledAt = (await FreeSlotsAsync(c, 1))[0];
+                    s.LastError = $"Threads' limit of {limit} posts in 24 hours was reached; moved to the next posting time.";
+                    await db.SaveChangesAsync(ct);
+                    return;
+                }
+            }
+            // Not knowing the limit doesn't stop the post; an invalid token fails it below, which emails the admins.
+            catch (Exception ex) when (ex is MetaException or HttpRequestException) { logger.LogWarning("Could not read Threads' publishing limit: {Message}", ex.Message); }
+        }
 
-        var content = await ContentAsync(p, c, s.CaptionOverride);
+        var content = await ContentAsync(p, c, s.CaptionOverride, s.Platform);
         if (content.Photos.Count == 0) { await FailAsync(s, "The product has no photos.", ct); return; }
         if (PublicBase() is not { } baseUrl) { await FailAsync(s, "Photos need a public address: set Smtp:ApiUrl (e.g. https://api.woodsycart.com).", ct); return; }
 
@@ -477,10 +592,12 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         try
         {
             var urls = PrepareJpegs(p.Id, content.Photos).Select(rel => baseUrl + rel).ToList();
-            var token = Token(c);
-            var result = s.Platform == SocialPlatform.Instagram
-                ? await meta.PublishInstagramAsync(c.InstagramUserId!, token, urls, content.Caption, ct)
-                : await meta.PublishFacebookAsync(c.PageId!, token, urls, content.Caption, ct);
+            var result = s.Platform switch
+            {
+                SocialPlatform.Instagram => await meta.PublishInstagramAsync(c.InstagramUserId!, Token(c), urls, content.Caption, ct),
+                SocialPlatform.Facebook => await meta.PublishFacebookAsync(c.PageId!, Token(c), urls, content.Caption, ct),
+                _ => await threads.PublishAsync(c.ThreadsUserId!, ThreadsToken(c), urls, content.Caption, c.ThreadsTopic, ct)
+            };
             s.ExternalId = result.Id; s.Permalink = result.Permalink; s.PublishedAt = DateTime.UtcNow;
             s.Status = SocialPostStatus.Published; s.LastError = null;
             Apply(s, content);
@@ -492,8 +609,10 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         {
             await FailAsync(s, ex.Message, ct);
             if (ex is MetaException { TokenInvalid: true })
-                await NotifyAsync("Instagram and Facebook are disconnected",
-                    "<p>Meta no longer accepts WoodsyCart's access (the Page token was revoked or the password changed). Posting is paused.</p><p>Connect again in Admin → Social media → Settings.</p>");
+                await NotifyAsync(s.Platform == SocialPlatform.Threads ? "Threads is disconnected" : "Instagram and Facebook are disconnected",
+                    s.Platform == SocialPlatform.Threads
+                        ? "<p>Threads no longer accepts WoodsyCart's access (the token expired or was removed). Threads posts are failing.</p><p>Connect Threads again in Admin → Social media → Settings.</p>"
+                        : "<p>Meta no longer accepts WoodsyCart's access (the Page token was revoked or the password changed). Posting is paused.</p><p>Connect again in Admin → Social media → Settings.</p>");
         }
     }
 
@@ -501,7 +620,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
     public async Task<int> RefreshAsync(IReadOnlyCollection<int>? productIds = null, CancellationToken ct = default)
     {
         var c = await ConfigAsync();
-        if (!IsConnected(c)) return 0;
+        if (!AnyConnected(c)) return 0;
         var q = db.SocialPosts.Where(s => Live.Contains(s.Status));
         if (productIds is not null) q = q.Where(s => productIds.Contains(s.ProductId));
         var posts = await q.ToListAsync(ct);
@@ -513,7 +632,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         foreach (var s in posts)
         {
             if (!products.TryGetValue(s.ProductId, out var p)) continue;   // product deleted: the post stays as it is
-            var content = await ContentAsync(p, c, s.CaptionOverride, biz);
+            var content = await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz);
             if (content.Hash == s.ContentHash)
             {
                 if (s.Status == SocialPostStatus.OutOfDate) { s.Status = SocialPostStatus.Published; changed++; }
@@ -521,7 +640,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
             }
             var before = string.IsNullOrEmpty(s.PostedSnapshot) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(s.PostedSnapshot);
             var samePhotos = before?.GetValueOrDefault("Photos") == content.Snapshot["Photos"];
-            if (s.Platform == SocialPlatform.Facebook && samePhotos && s.ExternalId is not null)
+            if (s.Platform == SocialPlatform.Facebook && samePhotos && s.ExternalId is not null && IsConnected(c))
             {
                 try
                 {
@@ -543,7 +662,7 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
     public async Task<int> AutoQueueAsync(CancellationToken ct)
     {
         var c = await ConfigAsync();
-        if (!IsConnected(c) || !c.AutoQueueNewProducts || c.AutoQueueSince is null) return 0;
+        if (!AnyConnected(c) || !c.AutoQueueNewProducts || c.AutoQueueSince is null) return 0;
         var ids = await db.Products.Where(p => p.IsActive && p.CreatedAt >= c.AutoQueueSince
                 && p.Images.Any(i => i.MediaType == MediaType.Image && i.LocalPath != null)
                 && !db.SocialPosts.Any(s => s.ProductId == p.Id))
@@ -553,6 +672,10 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
     }
 
     // ---------- Helpers ----------
+
+    private Task DeleteExternalAsync(SocialPost s, SocialConfig c) => s.Platform == SocialPlatform.Threads
+        ? threads.DeleteAsync(s.ExternalId!, ThreadsToken(c))
+        : meta.DeleteAsync(s.ExternalId!, Token(c));
 
     private static void Apply(SocialPost s, PostContent content)
     {

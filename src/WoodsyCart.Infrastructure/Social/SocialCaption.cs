@@ -15,13 +15,27 @@ public record PostContent(string Caption, List<string> Photos, Dictionary<string
 }
 
 /// <summary>
-/// Builds the Instagram / Facebook caption from the product. Template tokens are {name}; a line whose token is empty
+/// Builds the Instagram / Facebook caption (or the shorter Threads text) from the product. Template tokens are {name}; a line whose token is empty
 /// is left out, so nothing ever shows blank.
 /// </summary>
 public static partial class SocialCaption
 {
     public const int MaxLength = 2200;   // Instagram's caption limit
     public const int MaxPhotos = 10;     // Instagram carousel limit
+    public const int ThreadsMaxLength = 500;   // Threads' text limit, emojis counted by their UTF-8 bytes
+
+    public const string DefaultThreadsTemplate =
+        """
+        {name} | {category} in {city} 🛋️
+
+        {price}
+        ✅ Colour: {colours}
+        📐 Size: {dimensions}
+        🚚 Delivered in {delivery_days} days{assembly}
+
+        🛒 {url}
+        💬 WhatsApp: {whatsapp}
+        """;
 
     public const string DefaultTemplate =
         """
@@ -49,10 +63,13 @@ public static partial class SocialCaption
     public static readonly string[] Tokens =
     [
         "name", "category", "city", "hook", "price", "colours", "dimensions", "material", "warranty", "delivery_days", "assembly",
-        "details", "variants", "website", "search", "code", "whatsapp", "hashtags"
+        "details", "variants", "website", "url", "search", "code", "whatsapp", "hashtags"
     ];
 
-    public static PostContent Build(Product p, SocialConfig cfg, BusinessSettings biz, string? overrideCaption, List<string> photos)
+    /// <param name="threads">Threads: its own short template, no "link in bio" (links work there), at most 500 characters.</param>
+    /// <param name="storeUrl">Storefront address for {url}, e.g. https://woodsycart.com</param>
+    public static PostContent Build(Product p, SocialConfig cfg, BusinessSettings biz, string? overrideCaption, List<string> photos,
+        bool threads = false, string? storeUrl = null)
     {
         var inr = CultureInfo.GetCultureInfo("en-IN");
         string Money(decimal v) => "₹" + v.ToString("#,##0", inr);
@@ -64,7 +81,7 @@ public static partial class SocialCaption
         var hasRange = variants.Count > 1 && variants.Select(v => v.OfferPrice ?? v.SellingPrice).Distinct().Count() > 1;
         var shown = hasRange ? Math.Min(minVariant, price) : price;
         string priceLine;
-        if (!cfg.IncludePrice) priceLine = "💰 Price on our website (link in bio)";
+        if (!cfg.IncludePrice) priceLine = threads ? "💰 Price on our website" : "💰 Price on our website (link in bio)";
         else
         {
             priceLine = $"💰 {(hasRange ? "From " : "")}{Money(shown)}";
@@ -88,6 +105,7 @@ public static partial class SocialCaption
             .Select(l => "• " + Sentence(l)).ToList();
 
         var website = Clean(biz.Website) is { } w ? SchemePrefix().Replace(w, "").TrimEnd('/') : "woodsycart.com";
+        var url = $"{(Clean(storeUrl) ?? "https://" + website).TrimEnd('/')}/product/{p.Slug}";
         var hook = Clean(p.MetaDescription)
             ?? $"{p.Name}{(colours.Count > 0 ? " in " + string.Join(", ", colours) : "")}, {(p.AssemblyIncluded ? "delivered and assembled at your home" : "delivered to your home")} in {city}.";
 
@@ -107,14 +125,18 @@ public static partial class SocialCaption
             ["details"] = string.Join("\n", details),
             ["variants"] = string.Join("\n", variantLines),
             ["website"] = website,
+            ["url"] = url,
             ["search"] = p.Name.Trim().ToLowerInvariant(),
             ["code"] = Code(p.Id),
             ["whatsapp"] = Phone(cfg.WhatsApp ?? biz.WhatsApp),
             ["hashtags"] = Hashtags(p, cfg, city)
         };
 
-        var caption = string.IsNullOrWhiteSpace(overrideCaption) ? Render(cfg.Template ?? DefaultTemplate, values) : overrideCaption.Trim();
-        if (caption.Length > MaxLength) caption = caption[..(MaxLength - 1)].TrimEnd() + "…";
+        var caption = string.IsNullOrWhiteSpace(overrideCaption)
+            ? Render(threads ? cfg.ThreadsTemplate ?? DefaultThreadsTemplate : cfg.Template ?? DefaultTemplate, values)
+            : overrideCaption.Trim();
+        if (threads) caption = FitThreads(caption, url);
+        else if (caption.Length > MaxLength) caption = caption[..(MaxLength - 1)].TrimEnd() + "…";
 
         var snapshot = new Dictionary<string, string>
         {
@@ -127,6 +149,21 @@ public static partial class SocialCaption
     }
 
     public static string Code(int productId) => $"WC{productId}";
+
+    /// <summary>Length as Threads counts it: emojis and symbols such as ₹ by their UTF-8 bytes.</summary>
+    public static int ThreadsLength(string s) => Encoding.UTF8.GetByteCount(s);
+
+    /// <summary>Over 500: drop lines from the bottom up (keeping the first line and the product link), then cut.</summary>
+    private static string FitThreads(string text, string url)
+    {
+        var lines = text.Split('\n').ToList();
+        for (var i = lines.Count - 1; ThreadsLength(string.Join("\n", lines)) > ThreadsMaxLength && i > 0; i--)
+            if (!lines[i].Contains(url)) lines.RemoveAt(i);
+        text = BlankRuns().Replace(string.Join("\n", lines), "\n\n").Trim();
+        if (ThreadsLength(text) <= ThreadsMaxLength) return text;
+        while (ThreadsLength(text) + 3 > ThreadsMaxLength || char.IsHighSurrogate(text[^1])) text = text[..^1];
+        return text.TrimEnd() + "…";
+    }
 
     /// <summary>Names of the details that differ between what was posted and the product now.</summary>
     public static List<string> Changes(string? postedSnapshot, Dictionary<string, string> now)

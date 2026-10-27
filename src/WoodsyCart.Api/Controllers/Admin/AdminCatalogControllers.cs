@@ -105,9 +105,14 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
                 "failed" => [SocialPostStatus.Failed],
                 _ => taken
             };
-            query = q.Social == "not-posted"
-                ? query.Where(p => p.IsActive && !db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status)))
-                : query.Where(p => db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status)));
+            query = q.Social switch
+            {
+                "not-posted" => query.Where(p => p.IsActive && !db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status))),
+                // Already on Instagram/Facebook but not on Threads yet (for catching up after connecting Threads)
+                "not-on-threads" => query.Where(p => p.IsActive
+                    && !db.SocialPosts.Any(s => s.ProductId == p.Id && s.Platform == SocialPlatform.Threads && wanted.Contains(s.Status))),
+                _ => query.Where(p => db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status)))
+            };
         }
         query = q.Sort switch
         {

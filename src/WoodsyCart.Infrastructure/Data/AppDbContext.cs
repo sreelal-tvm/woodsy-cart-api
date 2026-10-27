@@ -76,6 +76,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.Template).HasMaxLength(4000);
             e.Property(x => x.Hashtags).HasMaxLength(500);
             e.Property(x => x.PostTimes).HasMaxLength(200);
+            e.Property(x => x.ThreadsTokenProtected).HasMaxLength(2000);
+            e.Property(x => x.ThreadsTemplate).HasMaxLength(2000);
+            e.Property(x => x.ThreadsTopic).HasMaxLength(50);
         });
         b.Entity<SocialPost>(e =>
         {

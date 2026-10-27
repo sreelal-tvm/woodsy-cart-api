@@ -2461,6 +2461,42 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(4000)
                         .HasColumnType("nvarchar(4000)");
 
+                    b.Property<string>("ThreadsAppId")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("ThreadsConnectedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("ThreadsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ThreadsTemplate")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTime?>("ThreadsTokenExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ThreadsTokenProtected")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTime?>("ThreadsTokenRefreshedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ThreadsTopic")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("ThreadsUserId")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("ThreadsUsername")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 

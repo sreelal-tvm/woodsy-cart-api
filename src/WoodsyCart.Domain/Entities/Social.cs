@@ -2,7 +2,7 @@ using WoodsyCart.Domain.Common;
 
 namespace WoodsyCart.Domain.Entities;
 
-/// <summary>Instagram / Facebook posting settings (Admin → Marketing → Social media). One row.</summary>
+/// <summary>Instagram / Facebook / Threads posting settings (Admin → Marketing → Social media). One row.</summary>
 public class SocialConfig : BaseEntity
 {
     // Connected accounts (through a Meta app with Facebook Login; the Page token is stored encrypted)
@@ -16,6 +16,19 @@ public class SocialConfig : BaseEntity
 
     public bool InstagramEnabled { get; set; } = true;
     public bool FacebookEnabled { get; set; } = true;
+
+    // Threads (its own login: the Threads app ID + secret from the same Meta app; the long-lived token is stored encrypted
+    // and refreshed weekly, since it lasts 60 days)
+    public string? ThreadsAppId { get; set; }
+    public string? ThreadsUserId { get; set; }
+    public string? ThreadsUsername { get; set; }
+    public string? ThreadsTokenProtected { get; set; }
+    public DateTime? ThreadsTokenExpiresAt { get; set; }
+    public DateTime? ThreadsTokenRefreshedAt { get; set; }
+    public DateTime? ThreadsConnectedAt { get; set; }
+    public bool ThreadsEnabled { get; set; } = true;
+    public string? ThreadsTemplate { get; set; }          // null = built-in short template (Threads allows 500 characters)
+    public string? ThreadsTopic { get; set; } = "Furniture";   // Threads allows one topic tag per post
 
     // Caption
     public string? Template { get; set; }                 // null = built-in template
@@ -41,7 +54,7 @@ public class SocialPost : BaseEntity
     public SocialPostStatus Status { get; set; }
     public DateTime? ScheduledAt { get; set; }             // UTC
     public DateTime? PublishedAt { get; set; }
-    public string? ExternalId { get; set; }                // Instagram media id / Facebook post id
+    public string? ExternalId { get; set; }                // Instagram media id / Facebook post id / Threads media id
     public string? Permalink { get; set; }
     public string? CaptionOverride { get; set; }           // edited in Admin before posting
     public string? PostedCaption { get; set; }             // exactly what is live

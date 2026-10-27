@@ -7,7 +7,7 @@ namespace WoodsyCart.Api.Controllers.Admin;
 
 public record SocialCaptionRequest(string? Caption);
 
-/// <summary>Admin → Social media: Instagram and Facebook posting of products (one post per product per platform).</summary>
+/// <summary>Admin → Social media: Instagram, Facebook and Threads posting of products (one post per product per platform).</summary>
 [Route("api/admin/social")]
 public class AdminSocialController(SocialService social) : AdminControllerBase
 {
@@ -25,6 +25,13 @@ public class AdminSocialController(SocialService social) : AdminControllerBase
 
     [HttpPost("disconnect")]
     public async Task<IActionResult> Disconnect() { await social.DisconnectAsync(); return NoContent(); }
+
+    /// <summary>Threads login, step 1: the address to send the browser to (Threads comes back to /api/social/threads/callback).</summary>
+    [HttpPost("threads/connect")]
+    public object ConnectThreads(ThreadsConnectRequest r) => new { url = social.StartThreads(r) };
+
+    [HttpPost("threads/disconnect")]
+    public async Task<IActionResult> DisconnectThreads() { await social.DisconnectThreadsAsync(); return NoContent(); }
 
     /// <summary>Queue and posted lists.</summary>
     [HttpGet("posts")]

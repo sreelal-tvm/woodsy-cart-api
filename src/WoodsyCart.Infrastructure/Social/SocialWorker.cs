@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace WoodsyCart.Infrastructure.Social;
 
 /// <summary>Every minute: posts what is due. Every 10 minutes: queues new products (if switched on) and checks live posts
-/// against their products (Facebook text updated, Instagram marked out of date).</summary>
+/// against their products (Facebook text updated, Instagram and Threads marked out of date); renews the Threads token weekly.</summary>
 public class SocialWorker(IServiceScopeFactory scopes, ILogger<SocialWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -22,6 +22,7 @@ public class SocialWorker(IServiceScopeFactory scopes, ILogger<SocialWorker> log
                 {
                     lastCheck = DateTime.UtcNow;
                     await social.AutoQueueAsync(stoppingToken);
+                    await social.RefreshThreadsTokenAsync(stoppingToken);
                     await social.RefreshAsync(ct: stoppingToken);
                 }
                 await social.PublishDueAsync(stoppingToken);

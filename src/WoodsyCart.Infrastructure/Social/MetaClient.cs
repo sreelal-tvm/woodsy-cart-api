@@ -134,7 +134,7 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         return await ReadAsync(res, ct);
     }
 
-    private static async Task<JsonElement> ReadAsync(HttpResponseMessage res, CancellationToken ct)
+    internal static async Task<JsonElement> ReadAsync(HttpResponseMessage res, CancellationToken ct)
     {
         JsonElement body;
         try { body = await res.Content.ReadFromJsonAsync<JsonElement>(ct); }
