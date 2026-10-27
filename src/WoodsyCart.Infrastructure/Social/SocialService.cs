@@ -71,6 +71,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         return c;
     }
 
+    public Task SaveConfigAsync() => db.SaveChangesAsync();
+
     public async Task<SocialSettingsDto> SettingsAsync()
     {
         var c = await ConfigAsync();
@@ -819,6 +821,15 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
 
     /// <summary>Instagram needs JPEG photos at public addresses: each product photo becomes a 1080×1350 JPEG on white
     /// (the whole product visible, never cropped), named after its source so it's made only once.</summary>
+    /// <summary>The product's post/feed JPEGs if they are all made already, else null.</summary>
+    public List<string>? ReadyJpegs(Product p)
+    {
+        var rel = Photos(p).Select(src => $"/media/social/{p.Id}/{Path.GetFileNameWithoutExtension(src)}.jpg").ToList();
+        return rel.Count > 0 && rel.All(r => File.Exists(storage.FullPath(r))) ? rel : null;
+    }
+
+    public List<string> PrepareJpegsFor(Product p) => PrepareJpegs(p.Id, Photos(p));
+
     private List<string> PrepareJpegs(int productId, List<string> sources)
     {
         var folder = $"/media/social/{productId}";
@@ -845,10 +856,10 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             }
             made.Add(rel);
         }
-        // Remove JPEGs of photos the product no longer uses.
+        // Remove JPEGs of photos the product no longer uses (reel covers are ReelMaker's).
         var keep = made.Select(Path.GetFileName).ToHashSet();
         foreach (var f in Directory.GetFiles(storage.FullPath(folder), "*.jpg"))
-            if (!keep.Contains(Path.GetFileName(f))) try { File.Delete(f); } catch (IOException) { }
+            if (!keep.Contains(Path.GetFileName(f)) && !Path.GetFileName(f).StartsWith("reel-")) try { File.Delete(f); } catch (IOException) { }
         return made;
     }
 

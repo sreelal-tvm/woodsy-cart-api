@@ -2412,6 +2412,16 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<bool>("FacebookEnabled")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("FeedEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("FeedFetchedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("FeedFetchedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<string>("Hashtags")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");

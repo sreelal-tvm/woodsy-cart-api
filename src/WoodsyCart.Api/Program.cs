@@ -128,6 +128,9 @@ app.UseCatalogCacheEviction();
 app.MapControllers();
 app.MapGet("/", () => app.Environment.IsDevelopment() ? Results.Redirect("/swagger") : Results.Text("WoodsyCart API"));
 // The API's own address: keep crawlers out of the JSON endpoints but let them see product photos.
-app.MapGet("/robots.txt", () => Results.Text("User-agent: *\nDisallow: /api/\nAllow: /media/\n", "text/plain"));
+app.MapGet("/robots.txt", () => Results.Text("User-agent: *\nDisallow: /api/\nAllow: /media/\nAllow: /feeds/\n", "text/plain"));
+// Product feed for Meta Commerce Manager (Admin → Social media → Settings → Product feed); 404 while switched off.
+app.MapGet(WoodsyCart.Infrastructure.Social.CatalogFeed.Path, async (HttpContext http, WoodsyCart.Infrastructure.Social.CatalogFeed feed) =>
+    await feed.CsvAsync(http.Request.Headers.UserAgent.ToString()) is { } csv ? Results.Text(csv, "text/csv; charset=utf-8") : Results.NotFound());
 
 app.Run();

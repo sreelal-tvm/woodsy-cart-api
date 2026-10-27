@@ -35,6 +35,11 @@ public class SocialConfig : BaseEntity
     public string ReelTimes { get; set; } = "18:00";       // India time, one reel per time
     public bool ReelMusic { get; set; } = true;            // use an uploaded track (none uploaded = no music)
 
+    // Product feed for Meta Commerce Manager (catalog): public at /feeds/meta-catalog.csv while switched on
+    public bool FeedEnabled { get; set; }
+    public DateTime? FeedFetchedAt { get; set; }
+    public string? FeedFetchedBy { get; set; }
+
     // Caption
     public string? Template { get; set; }                 // null = built-in template
     public bool IncludePrice { get; set; } = true;

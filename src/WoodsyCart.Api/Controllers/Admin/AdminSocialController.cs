@@ -6,10 +6,11 @@ using WoodsyCart.Infrastructure.Social;
 namespace WoodsyCart.Api.Controllers.Admin;
 
 public record SocialCaptionRequest(string? Caption);
+public record FeedSwitch(bool Enabled);
 
 /// <summary>Admin → Social media: Instagram, Facebook and Threads posting of products (one post per product per platform).</summary>
 [Route("api/admin/social")]
-public class AdminSocialController(SocialService social) : AdminControllerBase
+public class AdminSocialController(SocialService social, CatalogFeed feed) : AdminControllerBase
 {
     [HttpGet("summary")]
     public Task<object> Summary() => social.SummaryAsync();
@@ -53,6 +54,20 @@ public class AdminSocialController(SocialService social) : AdminControllerBase
     {
         var r = await social.MakeReelAsync(id, music);
         return PhysicalFile(social.ReelPath(r), "video/mp4", $"woodsycart-{id}-reel{(r.Track is null ? "" : "-music")}.mp4");
+    }
+
+    /// <summary>Product feed for Meta Commerce Manager: address, how many products are in it, when Meta last read it.</summary>
+    [HttpGet("feed")]
+    public Task<CatalogFeedStatus> Feed() => feed.StatusAsync();
+
+    [HttpPost("feed")]
+    public async Task<CatalogFeedStatus> SetFeed(FeedSwitch r)
+    {
+        var c = await social.ConfigAsync();
+        c.FeedEnabled = r.Enabled;
+        await social.SaveConfigAsync();
+        if (r.Enabled) await feed.PrepareImagesAsync(10, HttpContext.RequestAborted);   // the first products straight away
+        return await feed.StatusAsync();
     }
 
     [HttpGet("music")]
