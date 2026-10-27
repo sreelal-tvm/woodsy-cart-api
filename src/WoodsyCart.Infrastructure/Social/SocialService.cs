@@ -357,6 +357,22 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         }
     }
 
+    /// <summary>Threads' own 24-hour counter (250 a day), or our own count when Threads can't be reached.</summary>
+    private async Task<SocialQuota> ThreadsQuotaAsync(SocialConfig c)
+    {
+        try
+        {
+            var (used, limit) = await threads.QuotaAsync(c.ThreadsUserId!, ThreadsToken(c));
+            return new SocialQuota(SocialPlatform.Threads, used, limit, true);
+        }
+        catch (Exception ex) when (ex is MetaException or HttpRequestException)
+        {
+            logger.LogWarning("Could not read Threads' publishing limit: {Message}", ex.Message);
+            var since = DateTime.UtcNow.AddHours(-24);
+            return new SocialQuota(SocialPlatform.Threads, await db.SocialPosts.CountAsync(s => s.Platform == SocialPlatform.Threads && s.PublishedAt >= since), 250, false);
+        }
+    }
+
     /// <summary>The next posting times (from Settings, India time) that no queued product holds yet.</summary>
     private async Task<List<DateTime>> FreeSlotsAsync(SocialConfig c, int count)
     {
@@ -509,8 +525,11 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var publishable = await db.Products.CountAsync(p => p.IsActive && p.Images.Any(i => i.MediaType == MediaType.Image && i.LocalPath != null));
         return new
         {
-            connected = AnyConnected(c), instagram = c.InstagramUsername, page = c.PageName, threads = ThreadsConnected(c) ? c.ThreadsUsername : null,
-            enabled = Enabled(c), quota = await QuotaAsync(c), facebookLast24h = fb24, nextPostAt = next,
+            // Names only for connections that work now (a disconnected Page keeps its name in the settings)
+            connected = AnyConnected(c), instagram = IsConnected(c) ? c.InstagramUsername : null, page = IsConnected(c) ? c.PageName : null,
+            threads = ThreadsConnected(c) ? c.ThreadsUsername : null,
+            enabled = Enabled(c), quota = await QuotaAsync(c), threadsQuota = ThreadsConnected(c) ? await ThreadsQuotaAsync(c) : null,
+            facebookLast24h = fb24, nextPostAt = next,
             postedProducts, notPosted = Math.Max(0, publishable - postedProducts),
             counts = counts.GroupBy(x => x.Platform.ToString()).ToDictionary(g => g.Key, g => g.ToDictionary(x => x.Status.ToString(), x => x.Count))
         };
