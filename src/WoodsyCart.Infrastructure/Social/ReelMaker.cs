@@ -29,9 +29,9 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
     public static readonly string[] MusicTypes = [".mp3", ".m4a", ".aac", ".wav"];
     private const double SlideSeconds = 2.8, EndSeconds = 2.6, FadeSeconds = 0.4;
     // Safe zones (Instagram is the strictest; Facebook and Threads cover less): the app's own title and buttons cover the
-    // top ~250 px, the account name and caption the bottom ~400 px, and the like/comment buttons the right ~120 px.
-    // So everything sits between y 260 and 1520, and text stays left of x 940.
-    private const int BoxX = 40, BoxY = 350, BoxW = 1000, BoxH = 880, TextTop = 1250, TextWidth = 880;
+    // top ~150 px, the account name and caption the bottom ~400 px, and the like/comment buttons the right ~120 px.
+    // So everything sits between y 160 and 1520, and text stays left of x 940.
+    private const int BoxX = 40, BoxY = 275, BoxW = 1000, BoxH = 950, TextTop = 1250, TextWidth = 880;
     private static readonly SemaphoreSlim Gate = new(1, 1);   // one video at a time: FFmpeg uses every core
     private static readonly SKColor Brand = SKColor.Parse("#9A5226"), Dark = SKColor.Parse("#2A211C"),
         Cream = SKColor.Parse("#F3EEE7"), Grey = SKColor.Parse("#7A6E66");
@@ -57,7 +57,7 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
         var track = withMusic && tracks.Count > 0 ? tracks[productId % tracks.Count] : null;
         var folder = $"/media/social/{productId}";
         string Key(string? t) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize(s) + "|" + string.Join("|", photos.Take(MaxPhotos)) + "|" + t + "|v3")))[..16].ToLowerInvariant();
+            JsonSerializer.Serialize(s) + "|" + string.Join("|", photos.Take(MaxPhotos)) + "|" + t + "|v4")))[..16].ToLowerInvariant();
         var key = Key(track);
         var result = new ReelFile($"{folder}/reel-{key}.mp4", $"{folder}/reel-{key}.jpg", track);
         if (remake) foreach (var f in new[] { result.Video, result.Cover }) if (File.Exists(storage.FullPath(f))) File.Delete(storage.FullPath(f));
@@ -143,8 +143,8 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
         c.Clear(Cream);
         using var white = new SKPaint { Color = SKColors.White, IsAntialias = true };
         c.DrawRect(BoxX, BoxY, BoxW, BoxH, white);
-        var x = Text(c, "WoodsyCart", 60, 318, 46, Brand, bold: true);
-        if (s.Tagline is { Length: > 0 }) Text(c, "· " + s.Tagline, x + 14, 316, 26, Grey, maxWidth: 940 - x - 14);
+        Text(c, "WoodsyCart", 60, 205, 52, Brand, bold: true);
+        if (s.Tagline is { Length: > 0 }) Text(c, s.Tagline, 60, 248, 28, Grey, maxWidth: TextWidth);
     }
 
     private static void Headline(SKCanvas c, ReelScript s, List<string> facts)
