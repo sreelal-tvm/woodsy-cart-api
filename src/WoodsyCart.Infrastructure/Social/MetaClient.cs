@@ -119,15 +119,18 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         return new PublishResult(id, link);
     }
 
-    /// <summary>A Facebook Page reel: start an upload, let Facebook fetch the MP4 from its public address, then publish.
+    /// <summary>A Facebook Page reel: start an upload, send the MP4 itself, then publish.
     /// Facebook allows 30 reels through the API per 24 hours.</summary>
-    public async Task<PublishResult> PublishFacebookReelAsync(string pageId, string token, string videoUrl, string description, CancellationToken ct = default)
+    public async Task<PublishResult> PublishFacebookReelAsync(string pageId, string token, string videoFile, string description, CancellationToken ct = default)
     {
         var videoId = (await PostAsync($"{pageId}/video_reels", token, new() { ["upload_phase"] = "start" }, ct)).GetProperty("video_id").GetString()!;
-        using (var req = new HttpRequestMessage(HttpMethod.Post, $"https://rupload.facebook.com/video-upload/{Version}/{videoId}"))
+        var bytes = await File.ReadAllBytesAsync(videoFile, ct);
+        using (var req = new HttpRequestMessage(HttpMethod.Post, $"https://rupload.facebook.com/video-upload/{Version}/{videoId}") { Content = new ByteArrayContent(bytes) })
         {
             req.Headers.TryAddWithoutValidation("Authorization", "OAuth " + token);
-            req.Headers.TryAddWithoutValidation("file_url", videoUrl);
+            req.Headers.TryAddWithoutValidation("offset", "0");
+            req.Headers.TryAddWithoutValidation("file_size", bytes.Length.ToString());
+            req.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
             using var res = await Client.SendAsync(req, ct);
             await ReadAsync(res, ct);
         }
@@ -180,15 +183,20 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
 
     internal static async Task<JsonElement> ReadAsync(HttpResponseMessage res, CancellationToken ct)
     {
+        var text = await res.Content.ReadAsStringAsync(ct);
+        string Snip() => text.Length > 300 ? text[..300] : text;
         JsonElement body;
-        try { body = await res.Content.ReadFromJsonAsync<JsonElement>(ct); }
-        catch (JsonException) { throw new MetaException($"Meta answered {(int)res.StatusCode} without details."); }
+        try { body = JsonDocument.Parse(text).RootElement.Clone(); }
+        catch (JsonException) { throw new MetaException($"Meta answered {(int)res.StatusCode}: {Snip()}"); }
         if (body.ValueKind == JsonValueKind.Object && body.TryGetProperty("error", out var err))
         {
             var msg = err.TryGetProperty("error_user_msg", out var um) ? um.GetString() : err.TryGetProperty("message", out var m) ? m.GetString() : null;
             throw new MetaException(msg ?? "Meta reported an error.", err.TryGetProperty("code", out var c) ? c.GetInt32() : null);
         }
-        if (!res.IsSuccessStatusCode) throw new MetaException($"Meta answered {(int)res.StatusCode}.");
+        // The video upload host answers {"debug_info": {"message": …}} instead
+        if (body.ValueKind == JsonValueKind.Object && body.TryGetProperty("debug_info", out var dbg) && dbg.TryGetProperty("message", out var dm))
+            throw new MetaException($"Meta answered {(int)res.StatusCode}: {dm.GetString()}");
+        if (!res.IsSuccessStatusCode) throw new MetaException($"Meta answered {(int)res.StatusCode}: {Snip()}");
         return body;
     }
 

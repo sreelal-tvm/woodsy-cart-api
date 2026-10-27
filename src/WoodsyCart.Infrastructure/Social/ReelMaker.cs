@@ -47,7 +47,7 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
 
     /// <summary>Makes the reel (or returns it if this product's text, photos and track haven't changed).
     /// Each product always gets the same track, so remaking it doesn't change its music.</summary>
-    public async Task<ReelFile> MakeAsync(int productId, ReelScript s, IReadOnlyList<string> photos, bool withMusic, CancellationToken ct = default)
+    public async Task<ReelFile> MakeAsync(int productId, ReelScript s, IReadOnlyList<string> photos, bool withMusic, CancellationToken ct = default, bool remake = false)
     {
         if (!Available) throw new AppException($"Reels need FFmpeg at {FfmpegPath} (see the handbook, section 15).");
         if (photos.Count == 0) throw new AppException("The product has no photos.");
@@ -58,6 +58,7 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
             JsonSerializer.Serialize(s) + "|" + string.Join("|", photos.Take(MaxPhotos)) + "|" + t + "|v2")))[..16].ToLowerInvariant();
         var key = Key(track);
         var result = new ReelFile($"{folder}/reel-{key}.mp4", $"{folder}/reel-{key}.jpg", track);
+        if (remake) foreach (var f in new[] { result.Video, result.Cover }) if (File.Exists(storage.FullPath(f))) File.Delete(storage.FullPath(f));
         if (File.Exists(storage.FullPath(result.Video)) && File.Exists(storage.FullPath(result.Cover))) return result;
 
         await Gate.WaitAsync(ct);

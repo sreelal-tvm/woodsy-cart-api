@@ -222,8 +222,9 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (c.InstagramEnabled && IsConnected(c) && c.InstagramUserId is not null) list.Add(SocialPlatform.Instagram);
         if (c.FacebookEnabled && IsConnected(c)) list.Add(SocialPlatform.Facebook);
         if (c.ThreadsEnabled && ThreadsConnected(c)) list.Add(SocialPlatform.Threads);
-        if (c.ReelsEnabled && list.Contains(SocialPlatform.Instagram)) list.Add(SocialPlatform.InstagramReel);
-        if (c.ReelsEnabled && list.Contains(SocialPlatform.Facebook)) list.Add(SocialPlatform.FacebookReel);
+        // Reels can always be posted from a product; Settings → Reels only decides whether bulk and automatic posting add them
+        if (list.Contains(SocialPlatform.Instagram)) list.Add(SocialPlatform.InstagramReel);
+        if (list.Contains(SocialPlatform.Facebook)) list.Add(SocialPlatform.FacebookReel);
         return list;
     }
 
@@ -256,7 +257,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var enabled = Enabled(c);
         var shown = new List<SocialPlatform> { SocialPlatform.Instagram, SocialPlatform.Facebook };
         if (ThreadsConnected(c) || posts.Any(x => x.Platform == SocialPlatform.Threads)) shown.Add(SocialPlatform.Threads);
-        foreach (var reel in Reels) if (c.ReelsEnabled || posts.Any(x => x.Platform == reel)) shown.Add(reel);
+        foreach (var reel in Reels) if (IsConnected(c) || posts.Any(x => x.Platform == reel)) shown.Add(reel);
         var platforms = shown.Select(pl =>
         {
             var s = posts.FirstOrDefault(x => x.Platform == pl);
@@ -273,11 +274,11 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
 
     /// <summary>Makes (or returns) the product's reel video: for downloading and posting by hand with a trending song
     /// (<paramref name="music"/> false), or with one of the uploaded tracks.</summary>
-    public async Task<ReelFile> MakeReelAsync(int productId, bool music)
+    public async Task<ReelFile> MakeReelAsync(int productId, bool music, bool remake = false)
     {
         var p = await WithDetails().FirstOrDefaultAsync(x => x.Id == productId) ?? throw new AppException("Product not found", 404);
         var biz = await db.BusinessSettings.AsNoTracking().FirstAsync();
-        return await reels.MakeAsync(p.Id, SocialCaption.Reel(p, await ConfigAsync(), biz), Photos(p), music);
+        return await reels.MakeAsync(p.Id, SocialCaption.Reel(p, await ConfigAsync(), biz), Photos(p), music, remake: remake);
     }
 
     public string ReelPath(ReelFile r) => storage.FullPath(r.Video);
@@ -323,7 +324,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     {
         var c = await ConfigAsync();
         if (!AnyConnected(c)) throw new AppException("Connect Instagram and Facebook, or Threads, first (Social media → Settings).");
-        var platforms = Enabled(c).Where(p => r.Platforms is null || r.Platforms.Contains(p)).ToList();
+        var platforms = Enabled(c).Where(p => r.Platforms is null ? !IsReel(p) || c.ReelsEnabled : r.Platforms.Contains(p)).ToList();
         if (platforms.Count == 0) throw new AppException("Switch on Instagram, Facebook or Threads in Social media settings.");
 
         var ids = r.ProductIds.Distinct().ToList();
@@ -695,7 +696,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                 var reel = await reels.MakeAsync(p.Id, SocialCaption.Reel(p, c, biz), content.Photos, c.ReelMusic, ct);
                 result = s.Platform == SocialPlatform.InstagramReel
                     ? await meta.PublishInstagramReelAsync(c.InstagramUserId!, Token(c), baseUrl + reel.Video, baseUrl + reel.Cover, content.Caption, ct)
-                    : await meta.PublishFacebookReelAsync(c.PageId!, Token(c), baseUrl + reel.Video, content.Caption, ct);
+                    : await meta.PublishFacebookReelAsync(c.PageId!, Token(c), storage.FullPath(reel.Video), content.Caption, ct);
             }
             else
             {
