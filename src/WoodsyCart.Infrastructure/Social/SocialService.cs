@@ -143,6 +143,8 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
     public async Task<SocialProductDto> ProductAsync(int productId)
     {
         var p = await WithDetails().FirstOrDefaultAsync(x => x.Id == productId) ?? throw new AppException("Product not found", 404);
+        // Check this product's posts now instead of waiting for the 10-minute run, so the card shows the current status
+        await RefreshAsync([productId]);
         var c = await ConfigAsync();
         var posts = await db.SocialPosts.AsNoTracking().Where(s => s.ProductId == productId).ToListAsync();
         var biz = await db.BusinessSettings.AsNoTracking().FirstAsync();
@@ -287,6 +289,27 @@ public class SocialService(AppDbContext db, MetaClient meta, IDataProtectionProv
         var s = await Post(postId);
         if (s.Status is not (SocialPostStatus.Queued or SocialPostStatus.Failed)) throw new AppException("Only queued or failed posts can be removed from the queue.");
         s.Status = SocialPostStatus.Removed; s.ScheduledAt = null;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Deletes the live post on Instagram or Facebook. The product counts as not posted there again.</summary>
+    public async Task DeletePostAsync(int postId)
+    {
+        var s = await Post(postId);
+        if (!Live.Contains(s.Status)) throw new AppException("This post isn't live.");
+        if (s.ExternalId is not null)
+        {
+            var c = await ConfigAsync();
+            if (!IsConnected(c)) throw new AppException("Connect Instagram and Facebook in Settings first.");
+            try { await meta.DeleteAsync(s.ExternalId, Token(c)); }
+            catch (MetaException ex) when (ex.Code is 100) { }   // already deleted in the app
+            catch (MetaException ex) when (ex.Code is 10 or 200 && s.Platform == SocialPlatform.Instagram)
+            {
+                throw new AppException("Instagram needs the instagram_manage_contents permission to delete posts. Add it to the Meta app, then reconnect in Settings with a new token.");
+            }
+            catch (MetaException ex) { throw new AppException($"Couldn't delete the {s.Platform} post: " + ex.Message); }
+        }
+        s.Status = SocialPostStatus.Removed; s.ExternalId = null; s.Permalink = null; s.PublishedAt = null; s.ScheduledAt = null; s.LastError = null;
         await db.SaveChangesAsync();
     }
 

@@ -53,6 +53,9 @@ public class AdminSocialController(SocialService social) : AdminControllerBase
     [HttpPost("posts/{id:int}/remove")]
     public async Task<IActionResult> Remove(int id) { await social.RemoveFromQueueAsync(id); return NoContent(); }
 
+    [HttpPost("posts/{id:int}/delete")]
+    public async Task<IActionResult> Delete(int id) { await social.DeletePostAsync(id); return NoContent(); }
+
     [HttpPost("posts/{id:int}/retry")]
     public async Task<IActionResult> Retry(int id) { await social.RetryAsync(id); return NoContent(); }
 
