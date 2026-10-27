@@ -75,15 +75,28 @@ public class ThreadsClient(IHttpClientFactory http, IConfiguration config)
         return new PublishResult(id, link);
     }
 
+    /// <summary>A video post (the product reel, MP4 at a public address) with the text and topic tag.</summary>
+    public async Task<PublishResult> PublishVideoAsync(string userId, string token, string videoUrl, string text, string? topic, CancellationToken ct = default)
+    {
+        var post = new Dictionary<string, string> { ["media_type"] = "VIDEO", ["video_url"] = videoUrl, ["text"] = text };
+        if (!string.IsNullOrWhiteSpace(topic)) post["topic_tag"] = topic.Trim();
+        var container = await PostIdAsync($"{userId}/threads", token, post, ct);
+        await WaitReadyAsync(container, token, ct, attempts: 120);   // videos take longer than photos
+        var id = await PostIdAsync($"{userId}/threads_publish", token, new() { ["creation_id"] = container }, ct);
+        string? link = null;
+        try { link = (await GetAsync($"{Base}{id}?fields=permalink&access_token={E(token)}", ct)).GetProperty("permalink").GetString(); } catch (MetaException) { }
+        return new PublishResult(id, link);
+    }
+
     public async Task DeleteAsync(string id, string token, CancellationToken ct = default)
     {
         using var res = await Client.DeleteAsync($"{Base}{id}?access_token={E(token)}", ct);
         await MetaClient.ReadAsync(res, ct);
     }
 
-    private async Task WaitReadyAsync(string containerId, string token, CancellationToken ct)
+    private async Task WaitReadyAsync(string containerId, string token, CancellationToken ct, int attempts = 40)
     {
-        for (var i = 0; i < 40; i++)
+        for (var i = 0; i < attempts; i++)
         {
             var r = await GetAsync($"{Base}{containerId}?fields=status,error_message&access_token={E(token)}", ct);
             var status = r.TryGetProperty("status", out var s) ? s.GetString() : null;

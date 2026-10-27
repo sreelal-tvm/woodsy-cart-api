@@ -28,8 +28,10 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
     public const string MusicFolder = "/media/social/music";
     public static readonly string[] MusicTypes = [".mp3", ".m4a", ".aac", ".wav"];
     private const double SlideSeconds = 2.8, EndSeconds = 2.6, FadeSeconds = 0.4;
-    // Photo box: Instagram covers the bottom ~20% and the right edge with its buttons, so text stays above y 1640.
-    private const int BoxX = 40, BoxY = 190, BoxW = 1000, BoxH = 1120;
+    // Safe zones (Instagram is the strictest; Facebook and Threads cover less): the app's own title and buttons cover the
+    // top ~250 px, the account name and caption the bottom ~400 px, and the like/comment buttons the right ~120 px.
+    // So everything sits between y 260 and 1520, and text stays left of x 940.
+    private const int BoxX = 40, BoxY = 350, BoxW = 1000, BoxH = 880, TextTop = 1250, TextWidth = 880;
     private static readonly SemaphoreSlim Gate = new(1, 1);   // one video at a time: FFmpeg uses every core
     private static readonly SKColor Brand = SKColor.Parse("#9A5226"), Dark = SKColor.Parse("#2A211C"),
         Cream = SKColor.Parse("#F3EEE7"), Grey = SKColor.Parse("#7A6E66");
@@ -55,7 +57,7 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
         var track = withMusic && tracks.Count > 0 ? tracks[productId % tracks.Count] : null;
         var folder = $"/media/social/{productId}";
         string Key(string? t) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize(s) + "|" + string.Join("|", photos.Take(MaxPhotos)) + "|" + t + "|v2")))[..16].ToLowerInvariant();
+            JsonSerializer.Serialize(s) + "|" + string.Join("|", photos.Take(MaxPhotos)) + "|" + t + "|v3")))[..16].ToLowerInvariant();
         var key = Key(track);
         var result = new ReelFile($"{folder}/reel-{key}.mp4", $"{folder}/reel-{key}.jpg", track);
         if (remake) foreach (var f in new[] { result.Video, result.Cover }) if (File.Exists(storage.FullPath(f))) File.Delete(storage.FullPath(f));
@@ -141,48 +143,48 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
         c.Clear(Cream);
         using var white = new SKPaint { Color = SKColors.White, IsAntialias = true };
         c.DrawRect(BoxX, BoxY, BoxW, BoxH, white);
-        Text(c, "WoodsyCart", 60, 118, 56, Brand, bold: true);
-        if (s.Tagline is { Length: > 0 }) Text(c, s.Tagline, 60, 160, 30, Grey, maxWidth: 960);
+        var x = Text(c, "WoodsyCart", 60, 318, 46, Brand, bold: true);
+        if (s.Tagline is { Length: > 0 }) Text(c, "· " + s.Tagline, x + 14, 316, 26, Grey, maxWidth: 940 - x - 14);
     }
 
     private static void Headline(SKCanvas c, ReelScript s, List<string> facts)
     {
-        var y = 1340f;
-        if (s.Offer is { Length: > 0 }) { Pill(c, s.Offer.ToUpperInvariant(), 60, y, 30, Brand, SKColors.White); y += 64; }
-        y = Wrapped(c, s.Name, 60, y + 58, 58, Dark, 960, 2, bold: true) + 14;
+        var y = (float)TextTop;
+        if (s.Offer is { Length: > 0 }) { Pill(c, s.Offer.ToUpperInvariant(), 60, y, 28, Brand, SKColors.White); y += 56; }
+        y = Wrapped(c, s.Name, 60, y + 52, 52, Dark, TextWidth, 2, bold: true) + 10;
         if (s.Price is { Length: > 0 })
         {
-            var x = Text(c, s.Price, 60, y + 80, 84, Brand, bold: true) + 24;
-            if (s.Mrp is { Length: > 0 }) x = Text(c, "MRP " + s.Mrp, x, y + 80, 38, Grey, strike: true) + 20;
-            if (s.Saving is { Length: > 0 }) Pill(c, "Save " + s.Saving, x, y + 30, 34, SKColor.Parse("#25b003"), SKColors.White);
-            y += 100;
+            var x = Text(c, s.Price, 60, y + 76, 76, Brand, bold: true) + 22;
+            if (s.Mrp is { Length: > 0 }) x = Text(c, "MRP " + s.Mrp, x, y + 76, 34, Grey, strike: true) + 18;
+            if (s.Saving is { Length: > 0 } && x + 220 < 60 + TextWidth) Pill(c, "Save " + s.Saving, x, y + 30, 30, SKColor.Parse("#25b003"), SKColors.White);
+            y += 90;
         }
-        foreach (var f in facts) y = Wrapped(c, "• " + f, 60, y + 52, 40, Dark, 960, 1) + 6;
+        foreach (var f in facts) y = Wrapped(c, "• " + f, 60, y + 46, 36, Dark, TextWidth, 1) + 4;
     }
 
     private static void Facts(SKCanvas c, ReelScript s, List<string> facts)
     {
-        if (facts.Count == 0) { Wrapped(c, s.Name, 60, 1420, 54, Dark, 960, 2, bold: true); return; }
-        var y = 1350f;
-        var size = facts.Count >= 3 ? 44f : 54f;   // three facts must still end above Instagram's caption area
+        if (facts.Count == 0) { Wrapped(c, s.Name, 60, TextTop + 70, 52, Dark, TextWidth, 2, bold: true); return; }
+        var y = (float)TextTop;
+        var size = facts.Count >= 3 ? 40f : 50f;   // three facts must still end above the caption area (y 1520)
         using var dot = new SKPaint { Color = Brand, IsAntialias = true };
         foreach (var f in facts)
         {
             c.DrawCircle(78, y + size * 0.78f, 11, dot);
-            y = Wrapped(c, f, 110, y + size * 1.1f, size, Dark, 900, 2, bold: true) + size * 0.55f;
+            y = Wrapped(c, f, 110, y + size * 1.1f, size, Dark, TextWidth - 50, 2, bold: true) + size * 0.55f;
         }
     }
 
     private static void EndCard(SKCanvas c, ReelScript s)
     {
         c.Clear(Brand);
-        Centered(c, "WoodsyCart", 560, 96, SKColors.White, bold: true);
-        if (s.Tagline is { Length: > 0 }) Centered(c, s.Tagline, 630, 36, Cream);
-        Centered(c, "Order now", 860, 80, SKColors.White, bold: true);
-        Centered(c, s.Website, 960, 60, SKColors.White);
-        Centered(c, $"Search {s.Code} on our website", 1060, 40, Cream);
-        if (s.WhatsApp is { Length: > 0 }) Centered(c, "WhatsApp " + s.WhatsApp, 1180, 52, SKColors.White, bold: true);
-        Centered(c, "Delivered & assembled at your home", 1300, 40, Cream);
+        Centered(c, "WoodsyCart", 520, 92, SKColors.White, bold: true);
+        if (s.Tagline is { Length: > 0 }) Centered(c, s.Tagline, 590, 34, Cream);
+        Centered(c, "Order now", 800, 78, SKColors.White, bold: true);
+        Centered(c, s.Website, 895, 58, SKColors.White);
+        Centered(c, $"Search {s.Code} on our website", 985, 38, Cream);
+        if (s.WhatsApp is { Length: > 0 }) Centered(c, "WhatsApp " + s.WhatsApp, 1100, 50, SKColors.White, bold: true);
+        Centered(c, "Delivered & assembled at your home", 1210, 38, Cream);
     }
 
     /// <summary>The photo, whole (never cropped), centred on white in the photo box.</summary>

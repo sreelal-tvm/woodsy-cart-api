@@ -52,7 +52,9 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     private readonly IDataProtector _protector = dp.CreateProtector("WoodsyCart.SocialSecrets.v1");
     private static readonly SocialPostStatus[] Live = [SocialPostStatus.Published, SocialPostStatus.OutOfDate];
     private static readonly SocialPostStatus[] Taken = [SocialPostStatus.Queued, SocialPostStatus.Publishing, SocialPostStatus.Published, SocialPostStatus.OutOfDate];
-    private static readonly SocialPlatform[] Reels = [SocialPlatform.InstagramReel, SocialPlatform.FacebookReel];
+    private static readonly SocialPlatform[] Reels = [SocialPlatform.InstagramReel, SocialPlatform.FacebookReel, SocialPlatform.ThreadsVideo];
+    private static readonly SocialPlatform[] ThreadsKinds = [SocialPlatform.Threads, SocialPlatform.ThreadsVideo];
+    private static bool IsThreads(SocialPlatform p) => ThreadsKinds.Contains(p);
     private static readonly SocialPlatform[] InstagramKinds = [SocialPlatform.Instagram, SocialPlatform.InstagramReel];
     private static bool IsReel(SocialPlatform p) => Reels.Contains(p);
 
@@ -225,6 +227,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         // Reels can always be posted from a product; Settings → Reels only decides whether bulk and automatic posting add them
         if (list.Contains(SocialPlatform.Instagram)) list.Add(SocialPlatform.InstagramReel);
         if (list.Contains(SocialPlatform.Facebook)) list.Add(SocialPlatform.FacebookReel);
+        if (list.Contains(SocialPlatform.Threads)) list.Add(SocialPlatform.ThreadsVideo);
         return list;
     }
 
@@ -242,7 +245,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
 
     private async Task<PostContent> ContentAsync(Product p, SocialConfig c, string? overrideCaption, SocialPlatform platform, BusinessSettings? biz = null) =>
         SocialCaption.Build(p, c, biz ?? await db.BusinessSettings.AsNoTracking().FirstAsync(), overrideCaption, Photos(p),
-            platform == SocialPlatform.Threads, email.StorefrontUrl);
+            IsThreads(platform), email.StorefrontUrl);
 
     public async Task<SocialProductDto> ProductAsync(int productId)
     {
@@ -257,13 +260,14 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var enabled = Enabled(c);
         var shown = new List<SocialPlatform> { SocialPlatform.Instagram, SocialPlatform.Facebook };
         if (ThreadsConnected(c) || posts.Any(x => x.Platform == SocialPlatform.Threads)) shown.Add(SocialPlatform.Threads);
-        foreach (var reel in Reels) if (IsConnected(c) || posts.Any(x => x.Platform == reel)) shown.Add(reel);
+        foreach (var reel in Reels)
+            if ((reel == SocialPlatform.ThreadsVideo ? ThreadsConnected(c) : IsConnected(c)) || posts.Any(x => x.Platform == reel)) shown.Add(reel);
         var platforms = shown.Select(pl =>
         {
             var s = posts.FirstOrDefault(x => x.Platform == pl);
-            var basic = pl == SocialPlatform.Threads ? threadsPlain : plain;
+            var basic = IsThreads(pl) ? threadsPlain : plain;
             var now = s?.CaptionOverride is null ? basic
-                : SocialCaption.Build(p, c, biz, s.CaptionOverride, plain.Photos, pl == SocialPlatform.Threads, email.StorefrontUrl);
+                : SocialCaption.Build(p, c, biz, s.CaptionOverride, plain.Photos, IsThreads(pl), email.StorefrontUrl);
             var changes = s is { Status: SocialPostStatus.OutOfDate } ? SocialCaption.Changes(s.PostedSnapshot, now.Snapshot) : [];
             return new SocialPlatformState(pl, enabled.Contains(pl), s?.Id, s?.Status, s?.ScheduledAt, s?.PublishedAt, s?.Permalink, s?.LastError,
                 changes, s?.PostedCaption, s?.CaptionOverride is not null);
@@ -439,7 +443,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         {
             logger.LogWarning("Could not read Threads' publishing limit: {Message}", ex.Message);
             var since = DateTime.UtcNow.AddHours(-24);
-            return new SocialQuota(SocialPlatform.Threads, await db.SocialPosts.CountAsync(s => s.Platform == SocialPlatform.Threads && s.PublishedAt >= since), 250, false);
+            return new SocialQuota(SocialPlatform.Threads, await db.SocialPosts.CountAsync(s => ThreadsKinds.Contains(s.Platform) && s.PublishedAt >= since), 250, false);
         }
     }
 
@@ -482,10 +486,10 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (s.ExternalId is not null)
         {
             var c = await ConfigAsync();
-            if (!(s.Platform == SocialPlatform.Threads ? ThreadsConnected(c) : IsConnected(c))) throw new AppException($"Connect {s.Platform} in Settings first.");
+            if (!(IsThreads(s.Platform) ? ThreadsConnected(c) : IsConnected(c))) throw new AppException($"Connect {s.Platform} in Settings first.");
             try { await DeleteExternalAsync(s, c); }
             catch (MetaException ex) when (ex.Code is 100) { }   // already deleted in the app
-            catch (MetaException ex) when (ex.Code is 10 or 200 && s.Platform is SocialPlatform.Instagram or SocialPlatform.Threads)
+            catch (MetaException ex) when (ex.Code is 10 or 200 && s.Platform is SocialPlatform.Instagram or SocialPlatform.Threads or SocialPlatform.ThreadsVideo)
             {
                 throw new AppException(s.Platform == SocialPlatform.Instagram
                     ? "Instagram needs the instagram_manage_contents permission to delete posts. Add it to the Meta app, then reconnect in Settings with a new token."
@@ -515,7 +519,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var s = await Post(postId);
         s.CaptionOverride = string.IsNullOrWhiteSpace(caption) ? null : caption.Trim();
         if (s.CaptionOverride?.Length > SocialCaption.MaxLength) throw new AppException($"Captions can be at most {SocialCaption.MaxLength} characters.");
-        if (s.Platform == SocialPlatform.Threads && s.CaptionOverride is not null && SocialCaption.ThreadsLength(s.CaptionOverride) > SocialCaption.ThreadsMaxLength)
+        if (IsThreads(s.Platform) && s.CaptionOverride is not null && SocialCaption.ThreadsLength(s.CaptionOverride) > SocialCaption.ThreadsMaxLength)
             throw new AppException($"Threads allows {SocialCaption.ThreadsMaxLength} characters (emojis and ₹ count as 3–4). Shorten the text.");
         await db.SaveChangesAsync();
         if (s.Platform == SocialPlatform.Facebook && Live.Contains(s.Status)) await RefreshAsync([s.ProductId]);
@@ -664,7 +668,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                 return;
             }
         }
-        if (s.Platform == SocialPlatform.Threads)
+        if (IsThreads(s.Platform))
         {
             try
             {
@@ -694,9 +698,12 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             {
                 var biz = await db.BusinessSettings.AsNoTracking().FirstAsync(ct);
                 var reel = await reels.MakeAsync(p.Id, SocialCaption.Reel(p, c, biz), content.Photos, c.ReelMusic, ct);
-                result = s.Platform == SocialPlatform.InstagramReel
-                    ? await meta.PublishInstagramReelAsync(c.InstagramUserId!, Token(c), baseUrl + reel.Video, baseUrl + reel.Cover, content.Caption, ct)
-                    : await meta.PublishFacebookReelAsync(c.PageId!, Token(c), storage.FullPath(reel.Video), content.Caption, ct);
+                result = s.Platform switch
+                {
+                    SocialPlatform.InstagramReel => await meta.PublishInstagramReelAsync(c.InstagramUserId!, Token(c), baseUrl + reel.Video, baseUrl + reel.Cover, content.Caption, ct),
+                    SocialPlatform.FacebookReel => await meta.PublishFacebookReelAsync(c.PageId!, Token(c), storage.FullPath(reel.Video), content.Caption, ct),
+                    _ => await threads.PublishVideoAsync(c.ThreadsUserId!, ThreadsToken(c), baseUrl + reel.Video, content.Caption, c.ThreadsTopic, ct)
+                };
             }
             else
             {
@@ -719,8 +726,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         {
             await FailAsync(s, ex.Message, ct);
             if (ex is MetaException { TokenInvalid: true })
-                await NotifyAsync(s.Platform == SocialPlatform.Threads ? "Threads is disconnected" : "Instagram and Facebook are disconnected",
-                    s.Platform == SocialPlatform.Threads
+                await NotifyAsync(IsThreads(s.Platform) ? "Threads is disconnected" : "Instagram and Facebook are disconnected",
+                    IsThreads(s.Platform)
                         ? "<p>Threads no longer accepts WoodsyCart's access (the token expired or was removed). Threads posts are failing.</p><p>Connect Threads again in Admin → Social media → Settings.</p>"
                         : "<p>Meta no longer accepts WoodsyCart's access (the Page token was revoked or the password changed). Posting is paused.</p><p>Connect again in Admin → Social media → Settings.</p>");
         }
@@ -783,7 +790,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
 
     // ---------- Helpers ----------
 
-    private Task DeleteExternalAsync(SocialPost s, SocialConfig c) => s.Platform == SocialPlatform.Threads
+    private Task DeleteExternalAsync(SocialPost s, SocialConfig c) => IsThreads(s.Platform)
         ? threads.DeleteAsync(s.ExternalId!, ThreadsToken(c))
         : meta.DeleteAsync(s.ExternalId!, Token(c));
 
