@@ -13,7 +13,7 @@ namespace WoodsyCart.Infrastructure.Social;
 
 public record SocialReplyDto(int Id, string Author, string Text, DateTime PostedAt, bool FromUs);
 public record SocialCommentDto(int Id, int PostId, int ProductId, string ProductName, string? Image, SocialPlatform Platform, string? Permalink,
-    string Author, string Text, DateTime PostedAt, bool Unread, List<SocialReplyDto> Replies);
+    string Author, string Text, DateTime PostedAt, bool Unread, List<SocialReplyDto> Replies, bool FromUs = false);
 public record SocialReplyRequest(string Text);
 public record SocialPlatformTotals(SocialPlatform Platform, int Posts, int? Views, int? Reach, int Likes, int Comments, int? Shares, int? Saves);
 public record SocialTopPost(int Id, int ProductId, string ProductName, string? Image, SocialPlatform Platform, string? Permalink, DateTime? PublishedAt, SocialStats Stats);
@@ -182,10 +182,11 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     public Task<int> UnreadAsync() => db.SocialComments.CountAsync(x => x.ParentId == null && x.ReadAt == null);
 
     /// <summary>Conversations, newest activity first. <paramref name="account"/>: instagram, facebook or threads (reels included).</summary>
-    public async Task<PagedResult<SocialCommentDto>> ListAsync(bool unreadOnly, string? account, int page, int pageSize)
+    public async Task<PagedResult<SocialCommentDto>> ListAsync(bool unreadOnly, string? account, int page, int pageSize, bool own = false)
     {
-        var q = db.SocialComments.AsNoTracking().Where(x => x.ParentId == null && !x.FromUs);
-        if (unreadOnly) q = q.Where(x => x.ReadAt == null);
+        // Comments the account wrote itself only when asked for (they are never "new")
+        var q = db.SocialComments.AsNoTracking().Where(x => x.ParentId == null && (own || !x.FromUs));
+        if (unreadOnly) q = q.Where(x => x.ReadAt == null && !x.FromUs);
         SocialPlatform[]? kinds = account?.ToLowerInvariant() switch
         {
             "instagram" => [SocialPlatform.Instagram, SocialPlatform.InstagramReel],
@@ -209,7 +210,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         {
             Items = tops.Select(t => new SocialCommentDto(t.C.Id, t.C.SocialPostId, t.ProductId, t.Name, t.Image, t.C.Platform, t.Permalink,
                 t.C.Author, t.C.Text, t.C.PostedAt, t.C.ReadAt is null,
-                replies.Where(r => r.ParentId == t.C.Id).Select(r => new SocialReplyDto(r.Id, r.Author, r.Text, r.PostedAt, r.FromUs)).ToList())).ToList(),
+                replies.Where(r => r.ParentId == t.C.Id).Select(r => new SocialReplyDto(r.Id, r.Author, r.Text, r.PostedAt, r.FromUs)).ToList(), t.C.FromUs)).ToList(),
             Total = total, Page = page, PageSize = pageSize
         };
     }
@@ -298,6 +299,15 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     {
         if (string.IsNullOrEmpty(c.EngagementIssues)) return [];
         try { return JsonSerializer.Deserialize<Dictionary<string, string>>(c.EngagementIssues) ?? []; } catch (JsonException) { return []; }
+    }
+
+    /// <summary>After connecting again (maybe with new permissions): read that account's numbers and comments on the next run.</summary>
+    public static Task ReadAgainSoonAsync(AppDbContext db, bool threadsAccount)
+    {
+        var kinds = threadsAccount ? SocialService.ThreadsKinds
+            : [SocialPlatform.Instagram, SocialPlatform.InstagramReel, SocialPlatform.Facebook, SocialPlatform.FacebookReel];
+        return db.SocialPosts.Where(s => kinds.Contains(s.Platform) && s.StatsAt != null)
+            .ExecuteUpdateAsync(u => u.SetProperty(s => s.StatsAt, (DateTime?)null).SetProperty(s => s.CommentsCheckedAt, s => s.CommentsCheckedAt == null ? null : DateTime.UtcNow.AddDays(-1)));
     }
 
     /// <summary>Forgets the problems of one account (Meta or Threads) after it was connected again.</summary>

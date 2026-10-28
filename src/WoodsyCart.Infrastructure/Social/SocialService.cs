@@ -137,6 +137,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         c.InstagramUserId = page.InstagramId; c.InstagramUsername = page.InstagramUsername; c.ConnectedAt = DateTime.UtcNow;
         c.EngagementIssues = SocialEngagement.ClearIssues(c.EngagementIssues, "Meta");   // the new token may have the missing permissions
         await db.SaveChangesAsync();
+        await SocialEngagement.ReadAgainSoonAsync(db, threadsAccount: false);
         cache.Remove(QuotaKey);
         return new SocialConnectResult(true, null, page.InstagramId is null
             ? $"Connected to {page.Name}, but no Instagram account is linked to it. Link Instagram to the Page, then connect again."
@@ -179,6 +180,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             c.ThreadsTokenRefreshedAt = DateTime.UtcNow; c.ThreadsConnectedAt = DateTime.UtcNow;
             c.EngagementIssues = SocialEngagement.ClearIssues(c.EngagementIssues, "Threads");
             await db.SaveChangesAsync();
+            await SocialEngagement.ReadAgainSoonAsync(db, threadsAccount: true);
             return Back("threads=connected");
         }
         catch (Exception ex) when (ex is MetaException or HttpRequestException)

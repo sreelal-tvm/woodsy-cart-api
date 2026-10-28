@@ -40,8 +40,8 @@ public class AdminSocialController(SocialService social, CatalogFeed feed, Socia
 
     /// <summary>Comment conversations on our posts (unread = new comments since you last looked).</summary>
     [HttpGet("comments")]
-    public Task<PagedResult<SocialCommentDto>> Comments(bool unread = false, string? account = null, int page = 1, int pageSize = 20) =>
-        engagement.ListAsync(unread, account, page, pageSize);
+    public Task<PagedResult<SocialCommentDto>> Comments(bool unread = false, string? account = null, int page = 1, int pageSize = 20, bool own = false) =>
+        engagement.ListAsync(unread, account, page, pageSize, own);
 
     [HttpGet("comments/unread")]
     public async Task<object> UnreadComments() => new { count = await engagement.UnreadAsync() };
