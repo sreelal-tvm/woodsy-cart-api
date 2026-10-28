@@ -81,6 +81,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.ThreadsTemplate).HasMaxLength(2000);
             e.Property(x => x.ThreadsTopic).HasMaxLength(50);
             e.Property(x => x.ReelTimes).HasMaxLength(200);
+            e.Property(x => x.StoryTimes).HasMaxLength(200);
             e.Property(x => x.FeedFetchedBy).HasMaxLength(200);
             e.Property(x => x.EngagementIssues).HasMaxLength(2000);
         });

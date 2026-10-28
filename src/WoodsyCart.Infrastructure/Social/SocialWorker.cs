@@ -23,6 +23,7 @@ public class SocialWorker(IServiceScopeFactory scopes, ILogger<SocialWorker> log
                 {
                     lastCheck = DateTime.UtcNow;
                     await social.AutoQueueAsync(stoppingToken);
+                    await social.AutoStoriesAsync(stoppingToken);
                     await social.RefreshThreadsTokenAsync(stoppingToken);
                     // Catalog feed photos: a few products at a time so the first run doesn't load the server
                     await scope.ServiceProvider.GetRequiredService<CatalogFeed>().PrepareImagesAsync(40, stoppingToken);

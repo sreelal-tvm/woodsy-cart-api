@@ -68,7 +68,8 @@ public enum BackgroundStatus
     Failed = 6
 }
 
-public enum SocialPlatform { Instagram = 0, Facebook = 1, Threads = 2, InstagramReel = 3, FacebookReel = 4, ThreadsVideo = 5 }
+public enum SocialPlatform { Instagram = 0, Facebook = 1, Threads = 2, InstagramReel = 3, FacebookReel = 4, ThreadsVideo = 5,
+    InstagramStory = 6, FacebookStory = 7 }
 
 public enum SocialPostStatus
 {

@@ -89,6 +89,36 @@ public class ReelMaker(FileStorage storage, IConfiguration config, ILogger<ReelM
         }
     }
 
+    /// <summary>The story picture (1080×1920 JPEG): the first photo with name, price and offer, and where to order. Made
+    /// again only when the text or photo changes. Stories keep clear of the profile bar (top ~250 px) and the reply box
+    /// (bottom ~300 px).</summary>
+    public string MakeStory(int productId, ReelScript s, string photo)
+    {
+        var folder = $"/media/social/{productId}";
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(s) + "|" + photo + "|s1")))[..16].ToLowerInvariant();
+        var rel = $"{folder}/story-{key}.jpg";
+        if (File.Exists(storage.FullPath(rel))) return rel;
+        Directory.CreateDirectory(storage.FullPath(folder));
+        using (var bmp = new SKBitmap(W, H))
+        using (var canvas = new SKCanvas(bmp))
+        {
+            Background(canvas, s);
+            using (var small = FitPhoto(storage.FullPath(photo), 1)) canvas.DrawBitmap(small, BoxX, BoxY);
+            Headline(canvas, s, []);
+            using var band = new SKPaint { Color = Brand, IsAntialias = true };
+            canvas.DrawRoundRect(SKRect.Create(40, 1530, 1000, 110), 24, 24, band);
+            Centered(canvas, $"Order on {s.Website}", 1580, 40, SKColors.White, bold: true);
+            Centered(canvas, s.WhatsApp is { Length: > 0 } ? $"Search {s.Code} · WhatsApp {s.WhatsApp}" : $"Search {s.Code} on our website", 1622, 30, Cream);
+            using var img = SKImage.FromBitmap(bmp);
+            using var jpg = img.Encode(SKEncodedImageFormat.Jpeg, 90);
+            using var fs = File.Create(storage.FullPath(rel));
+            jpg.SaveTo(fs);
+        }
+        foreach (var f in Directory.GetFiles(storage.FullPath(folder), "story-*.jpg"))
+            if (Path.GetFileName(f) != Path.GetFileName(rel)) try { File.Delete(f); } catch (IOException) { }
+        return rel;
+    }
+
     // ---------- Slides ----------
 
     private record Slide(string Base, string? Photo, double Seconds);

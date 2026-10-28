@@ -11,6 +11,8 @@ public class MetaException(string message, int? code = null) : Exception(message
     public bool TokenInvalid => Code == 190;
     /// <summary>The token lacks a permission (Meta error 10 or 200-299).</summary>
     public bool IsPermission => Code is 10 or (>= 200 and < 300);
+    /// <summary>Instagram accepted the media but failed to process it; often works on a second try.</summary>
+    public bool Processing { get; init; }
 }
 
 public record MetaPage(string Id, string Name, string Token, string? InstagramId, string? InstagramUsername);
@@ -98,13 +100,26 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         return new PublishResult(id, link);
     }
 
+    /// <summary>A story picture (JPEG at a public address). Stories have no caption and disappear after 24 hours.</summary>
+    public async Task<PublishResult> PublishInstagramStoryAsync(string igId, string token, string imageUrl, CancellationToken ct = default)
+    {
+        var container = await PostIdAsync($"{igId}/media", token, new() { ["media_type"] = "STORIES", ["image_url"] = imageUrl }, ct);
+        await WaitReadyAsync(container, token, ct);
+        var id = await PostIdAsync($"{igId}/media_publish", token, new() { ["creation_id"] = container }, ct);
+        string? link = null;
+        try { link = (await GetAsync($"{id}?fields=permalink", token, ct)).GetProperty("permalink").GetString(); } catch (Exception e) when (e is MetaException or KeyNotFoundException) { }
+        return new PublishResult(id, link);
+    }
+
     private async Task WaitReadyAsync(string containerId, string token, CancellationToken ct, int attempts = 40)
     {
         for (var i = 0; i < attempts; i++)
         {
-            var status = (await GetAsync($"{containerId}?fields=status_code", token, ct)).GetProperty("status_code").GetString();
+            var r = await GetAsync($"{containerId}?fields=status_code,status", token, ct);
+            var status = Str(r, "status_code");
             if (status is "FINISHED" or "PUBLISHED") return;
-            if (status is "ERROR" or "EXPIRED") throw new MetaException($"Instagram could not process the photo ({status}).");
+            // "status" carries Instagram's reason, e.g. "Error: Media upload has failed with error code 2207026"
+            if (status is "ERROR" or "EXPIRED") throw new MetaException($"Instagram could not process the media ({Str(r, "status") ?? status}).") { Processing = true };
             await Task.Delay(TimeSpan.FromSeconds(3), ct);
         }
         throw new MetaException("Instagram took too long to process the photos.");
@@ -157,6 +172,14 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         return new PublishResult(videoId, $"https://www.facebook.com/reel/{videoId}");
     }
 
+    /// <summary>A Page story: the photo is uploaded unpublished, then posted as a story.</summary>
+    public async Task<PublishResult> PublishFacebookStoryAsync(string pageId, string token, string imageUrl, CancellationToken ct = default)
+    {
+        var photo = await PostIdAsync($"{pageId}/photos", token, new() { ["url"] = imageUrl, ["published"] = "false" }, ct);
+        var r = await PostAsync($"{pageId}/photo_stories", token, new() { ["photo_id"] = photo }, ct);
+        return new PublishResult(Str(r, "post_id") ?? photo, $"https://www.facebook.com/stories/{pageId}");
+    }
+
     /// <summary>Changes the text of a Page post made by this app (photos can't be changed).</summary>
     public Task UpdateFacebookAsync(string postId, string token, string message, CancellationToken ct = default) =>
         PostAsync(postId, token, new() { ["message"] = message }, ct);
@@ -172,8 +195,18 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
 
     /// <summary>Instagram post or reel numbers. Views, reach, saves and shares need instagram_manage_insights; likes and
     /// comments come from the post itself when that permission is missing (<see cref="PostStats.NeedsPermission"/>).</summary>
-    public async Task<PostStats> InstagramStatsAsync(string mediaId, string token, CancellationToken ct = default)
+    public async Task<PostStats> InstagramStatsAsync(string mediaId, string token, CancellationToken ct = default, bool story = false)
     {
+        if (story)
+        {
+            // Stories have no likes or saves; their replies arrive as messages. Readable only while the story is up.
+            try
+            {
+                var s = Metrics(await GetAsync($"{mediaId}/insights?metric=views,reach,replies,shares", token, ct));
+                return new PostStats(s.Num("views"), s.Num("reach"), null, s.Num("replies"), s.Num("shares"), null, false);
+            }
+            catch (MetaException ex) when (ex.IsPermission) { return new PostStats(null, null, null, null, null, null, true); }
+        }
         try
         {
             var m = Metrics(await GetAsync($"{mediaId}/insights?metric=views,reach,likes,comments,saved,shares", token, ct));
@@ -203,8 +236,9 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         {
             if (reel)
             {
-                var m = Metrics(await GetAsync($"{id}/video_insights?metric=blue_reels_play_count,post_impressions_unique", token, ct));
-                views = m.Num("blue_reels_play_count"); reach = m.Num("post_impressions_unique");
+                views = Metrics(await GetAsync($"{id}/video_insights?metric=blue_reels_play_count", token, ct)).Num("blue_reels_play_count");
+                try { reach = Metrics(await GetAsync($"{id}/video_insights?metric=post_impressions_unique", token, ct)).Num("post_impressions_unique"); }
+                catch (MetaException ex) when (ex.Code == 100) { }   // not given for every reel
             }
             else
             {

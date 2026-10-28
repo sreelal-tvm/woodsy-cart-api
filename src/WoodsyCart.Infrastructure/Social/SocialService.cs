@@ -20,17 +20,19 @@ public record SocialSettingsDto(
     bool AutoQueueNewProducts, bool PublicPhotos,
     bool ThreadsConnected, string? ThreadsAppId, string? ThreadsUsername, DateTime? ThreadsConnectedAt, DateTime? ThreadsTokenExpiresAt,
     bool ThreadsEnabled, string ThreadsTemplate, bool ThreadsCustomTemplate, string ThreadsDefaultTemplate, string? ThreadsTopic, string? ThreadsCallbackUrl,
-    bool ReelsEnabled, string ReelTimes, bool ReelMusic, bool ReelsAvailable, List<SocialMusicTrack> MusicTracks);
+    bool ReelsEnabled, string ReelTimes, bool ReelMusic, bool ReelsAvailable, List<SocialMusicTrack> MusicTracks,
+    bool StoriesEnabled, string StoryTimes);
 public record SocialMusicTrack(string Name, long Size);
 public record SocialSettingsUpdate(bool InstagramEnabled, bool FacebookEnabled, string? Template, bool IncludePrice, bool ShowMrp,
     string? WhatsApp, string? City, string? Hashtags, int MaxHashtags, string PostTimes, bool AutoQueueNewProducts,
     bool ThreadsEnabled = true, string? ThreadsTemplate = null, string? ThreadsTopic = "Furniture",
-    bool ReelsEnabled = false, string? ReelTimes = "18:00", bool ReelMusic = true);
+    bool ReelsEnabled = false, string? ReelTimes = "18:00", bool ReelMusic = true,
+    bool StoriesEnabled = false, string? StoryTimes = "19:00");
 public record ThreadsConnectRequest(string AppId, string AppSecret);
 public record SocialConnectRequest(string AppId, string AppSecret, string UserToken, string? PageId);
 public record SocialPageChoice(string Id, string Name, string? Instagram);
 public record SocialConnectResult(bool Connected, List<SocialPageChoice>? Pages, string? Message);
-public record SocialQueueRequest(List<int> ProductIds, bool Now = false, List<SocialPlatform>? Platforms = null);
+public record SocialQueueRequest(List<int> ProductIds, bool Now = false, List<SocialPlatform>? Platforms = null, string? Note = null);
 public record SocialQueueResult(int Products, int PostingNow, int Scheduled, int Skipped, DateTime? FirstSlot, string? Note);
 public record SocialPlatformState(SocialPlatform Platform, bool Enabled, int? PostId, SocialPostStatus? Status, DateTime? ScheduledAt,
     DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, string? PostedCaption, bool CustomCaption, SocialStats? Stats = null);
@@ -60,8 +62,26 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     private static readonly SocialPlatform[] Reels = [SocialPlatform.InstagramReel, SocialPlatform.FacebookReel, SocialPlatform.ThreadsVideo];
     internal static readonly SocialPlatform[] ThreadsKinds = [SocialPlatform.Threads, SocialPlatform.ThreadsVideo];
     internal static bool IsThreads(SocialPlatform p) => ThreadsKinds.Contains(p);
-    internal static readonly SocialPlatform[] InstagramKinds = [SocialPlatform.Instagram, SocialPlatform.InstagramReel];
+    internal static readonly SocialPlatform[] InstagramKinds = [SocialPlatform.Instagram, SocialPlatform.InstagramReel, SocialPlatform.InstagramStory];
     private static bool IsReel(SocialPlatform p) => Reels.Contains(p);
+    internal static readonly SocialPlatform[] Stories = [SocialPlatform.InstagramStory, SocialPlatform.FacebookStory];
+    internal static bool IsStory(SocialPlatform p) => Stories.Contains(p);
+    private const int StoryGapDays = 7;     // automatic stories don't show the same product again within a week
+
+    /// <summary>Photo posts, reels and stories each go out at their own times (Settings).</summary>
+    private enum Slot { Photo, Reel, Story }
+    private static Slot SlotOf(SocialPlatform p) => IsStory(p) ? Slot.Story : IsReel(p) ? Slot.Reel : Slot.Photo;
+    private static SocialPlatform[] PlatformsOf(Slot k) => k switch
+    {
+        Slot.Story => Stories, Slot.Reel => Reels,
+        _ => [SocialPlatform.Instagram, SocialPlatform.Facebook, SocialPlatform.Threads]
+    };
+
+    /// <summary>The product can't be queued again on this platform: already queued or live. A story can always be posted
+    /// again (e.g. after removing it in the app); the automatic picker keeps its own one-week gap.</summary>
+    private static bool Blocks(SocialPost s) => IsStory(s.Platform)
+        ? s.Status is SocialPostStatus.Queued or SocialPostStatus.Publishing
+        : Taken.Contains(s.Status);
 
     // ---------- Settings & connection ----------
 
@@ -88,7 +108,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             ThreadsConnected(c), c.ThreadsAppId, c.ThreadsUsername, c.ThreadsConnectedAt, c.ThreadsTokenExpiresAt, c.ThreadsEnabled,
             c.ThreadsTemplate ?? SocialCaption.DefaultThreadsTemplate, c.ThreadsTemplate is not null, SocialCaption.DefaultThreadsTemplate,
             c.ThreadsTopic, ThreadsCallback(),
-            c.ReelsEnabled, c.ReelTimes, c.ReelMusic, reels.Available, Music());
+            c.ReelsEnabled, c.ReelTimes, c.ReelMusic, reels.Available, Music(),
+            c.StoriesEnabled, c.StoryTimes);
     }
 
     public async Task SaveSettingsAsync(SocialSettingsUpdate r)
@@ -106,6 +127,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             throw new AppException("The Threads topic can be at most 50 characters, without full stops or &.");
         var reelTimes = ParseTimes(r.ReelTimes);
         if (r.ReelsEnabled && reelTimes.Count == 0) throw new AppException("Enter at least one reel time, e.g. 18:00.");
+        var storyTimes = ParseTimes(r.StoryTimes);
+        if (r.StoriesEnabled && storyTimes.Count == 0) throw new AppException("Enter at least one story time, e.g. 19:00.");
         var c = await ConfigAsync();
         if (r.AutoQueueNewProducts && !c.AutoQueueNewProducts) c.AutoQueueSince = DateTime.UtcNow;
         c.InstagramEnabled = r.InstagramEnabled; c.FacebookEnabled = r.FacebookEnabled; c.Template = template;
@@ -115,6 +138,12 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         c.ThreadsEnabled = r.ThreadsEnabled; c.ThreadsTemplate = threadsTemplate; c.ThreadsTopic = topic;
         c.ReelsEnabled = r.ReelsEnabled; c.ReelMusic = r.ReelMusic;
         if (reelTimes.Count > 0) c.ReelTimes = string.Join(",", reelTimes.Select(t => t.ToString(@"hh\:mm")));
+        if (c.StoriesEnabled && !r.StoriesEnabled)
+            // Switched off: automatic stories still waiting leave the queue (stories queued by hand stay)
+            await db.SocialPosts.Where(x => Stories.Contains(x.Platform) && x.Status == SocialPostStatus.Queued && x.LastError == AutoStoryNote)
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.Status, SocialPostStatus.Removed).SetProperty(x => x.ScheduledAt, (DateTime?)null));
+        c.StoriesEnabled = r.StoriesEnabled;
+        if (storyTimes.Count > 0) c.StoryTimes = string.Join(",", storyTimes.Select(t => t.ToString(@"hh\:mm")));
         await db.SaveChangesAsync();
     }
 
@@ -239,6 +268,9 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (list.Contains(SocialPlatform.Instagram)) list.Add(SocialPlatform.InstagramReel);
         if (list.Contains(SocialPlatform.Facebook)) list.Add(SocialPlatform.FacebookReel);
         if (list.Contains(SocialPlatform.Threads)) list.Add(SocialPlatform.ThreadsVideo);
+        // Stories likewise: by hand any time; Settings → Stories adds automatic ones
+        if (list.Contains(SocialPlatform.Instagram)) list.Add(SocialPlatform.InstagramStory);
+        if (list.Contains(SocialPlatform.Facebook)) list.Add(SocialPlatform.FacebookStory);
         return list;
     }
 
@@ -273,6 +305,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (ThreadsConnected(c) || posts.Any(x => x.Platform == SocialPlatform.Threads)) shown.Add(SocialPlatform.Threads);
         foreach (var reel in Reels)
             if ((reel == SocialPlatform.ThreadsVideo ? ThreadsConnected(c) : IsConnected(c)) || posts.Any(x => x.Platform == reel)) shown.Add(reel);
+        foreach (var story in Stories) if (IsConnected(c) || posts.Any(x => x.Platform == story)) shown.Add(story);
         var platforms = shown.Select(pl =>
         {
             var s = posts.FirstOrDefault(x => x.Platform == pl);
@@ -297,6 +330,18 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     }
 
     public string ReelPath(ReelFile r) => storage.FullPath(r.Video);
+
+    /// <summary>Makes (or returns) the product's story picture, e.g. to post by hand with stickers or music.</summary>
+    public async Task<string> MakeStoryAsync(int productId)
+    {
+        var p = await WithDetails().FirstOrDefaultAsync(x => x.Id == productId) ?? throw new AppException("Product not found", 404);
+        var photos = Photos(p);
+        if (photos.Count == 0) throw new AppException("The product has no photos.");
+        var biz = await db.BusinessSettings.AsNoTracking().FirstAsync();
+        return reels.MakeStory(p.Id, SocialCaption.Reel(p, await ConfigAsync(), biz), photos[0]);
+    }
+
+    public string FullPath(string rel) => storage.FullPath(rel);
 
     // ---------- Reel music (royalty-free tracks uploaded in Admin) ----------
 
@@ -339,7 +384,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     {
         var c = await ConfigAsync();
         if (!AnyConnected(c)) throw new AppException("Connect Instagram and Facebook, or Threads, first (Social media → Settings).");
-        var platforms = Enabled(c).Where(p => r.Platforms is null ? !IsReel(p) || c.ReelsEnabled : r.Platforms.Contains(p)).ToList();
+        // Bulk and automatic posting add reels only when switched on; stories have their own automatic picker
+        var platforms = Enabled(c).Where(p => r.Platforms is null ? (!IsReel(p) || c.ReelsEnabled) && !IsStory(p) : r.Platforms.Contains(p)).ToList();
         if (platforms.Count == 0) throw new AppException("Switch on Instagram, Facebook or Threads in Social media settings.");
 
         var ids = r.ProductIds.Distinct().ToList();
@@ -353,7 +399,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         {
             var p = products.FirstOrDefault(x => x.Id == id);
             if (p is null || !p.IsActive || !p.HasPhoto) { skipped++; continue; }
-            var need = platforms.Where(pl => !existing.Any(s => s.ProductId == id && s.Platform == pl && Taken.Contains(s.Status))).ToList();
+            var need = platforms.Where(pl => !existing.Any(s => s.ProductId == id && s.Platform == pl && Blocks(s))).ToList();
             if (need.Count == 0) { skipped++; continue; }
             work.Add((id, need));
         }
@@ -371,36 +417,43 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                     ? "Instagram's daily limit is used up, so all of them were scheduled instead."
                     : $"Only {room} more can be posted in the next 24 hours (Instagram's limit); the rest were scheduled.";
         }
-        // Photo posts and reels each have their own posting times. A product already waiting in the queue on another platform
-        // of the same kind (e.g. Threads added later) goes out at that same time.
+        // Photo posts, reels and stories each have their own posting times. A product already waiting in the queue on another
+        // platform of the same kind (e.g. Threads added later) goes out at that same time.
         var waiting = existing.Where(s => s.Status == SocialPostStatus.Queued && s.ScheduledAt is not null)
-            .GroupBy(s => (s.ProductId, IsReel(s.Platform))).ToDictionary(g => g.Key, g => g.Min(s => s.ScheduledAt!.Value));
-        int Needed(bool reel) => work.Skip(nowCount).Count(w => w.Platforms.Any(pl => IsReel(pl) == reel) && !waiting.ContainsKey((w.ProductId, reel)));
-        var photoSlots = await FreeSlotsAsync(c, Needed(false), reel: false);
-        var reelSlots = await FreeSlotsAsync(c, Needed(true), reel: true);
-        int nextPhoto = 0, nextReel = 0, joined = 0;
+            .GroupBy(s => (s.ProductId, SlotOf(s.Platform))).ToDictionary(g => g.Key, g => g.Min(s => s.ScheduledAt!.Value));
+        int Needed(Slot k) => work.Skip(nowCount).Count(w => w.Platforms.Any(pl => SlotOf(pl) == k) && !waiting.ContainsKey((w.ProductId, k)));
+        var slots = new Dictionary<Slot, List<DateTime>>();
+        foreach (var k in Enum.GetValues<Slot>()) slots[k] = await FreeSlotsAsync(c, Needed(k), k);
+        var next = Enum.GetValues<Slot>().ToDictionary(k => k, _ => 0);
+        var joined = 0;
         var at = DateTime.UtcNow;
         for (var i = 0; i < work.Count; i++)
         {
-            var times = new Dictionary<bool, DateTime>();
+            var times = new Dictionary<Slot, DateTime>();
             foreach (var pl in work[i].Platforms)
             {
-                var reel = IsReel(pl);
-                if (!times.TryGetValue(reel, out var when))
+                var k = SlotOf(pl);
+                if (!times.TryGetValue(k, out var when))
                 {
                     if (i < nowCount) when = at;
-                    else if (waiting.TryGetValue((work[i].ProductId, reel), out var t)) { when = t; joined++; }
-                    else when = reel ? reelSlots[nextReel++] : photoSlots[nextPhoto++];
-                    times[reel] = when;
+                    else if (waiting.TryGetValue((work[i].ProductId, k), out var t)) { when = t; joined++; }
+                    else when = slots[k][next[k]++];
+                    times[k] = when;
                 }
                 var s = existing.FirstOrDefault(x => x.ProductId == work[i].ProductId && x.Platform == pl);
                 if (s is null) { s = new SocialPost { ProductId = work[i].ProductId, Platform = pl }; db.SocialPosts.Add(s); }
-                s.Status = SocialPostStatus.Queued; s.ScheduledAt = when; s.LastError = null;
+                if (IsStory(pl) && Live.Contains(s.Status))
+                {
+                    // A story again: the row starts over (the old story has expired)
+                    s.ExternalId = null; s.Permalink = null; s.PublishedAt = null;
+                    ForgetEngagement(s);
+                }
+                s.Status = SocialPostStatus.Queued; s.ScheduledAt = when; s.LastError = r.Note;
             }
         }
         await db.SaveChangesAsync();
         if (joined > 0) note = (note is null ? "" : note + " ") + $"{joined} already in the queue on another platform will post at that same time.";
-        var first = photoSlots.Concat(reelSlots).Order().Cast<DateTime?>().FirstOrDefault();
+        var first = slots.Values.SelectMany(x => x).Order().Cast<DateTime?>().FirstOrDefault();
         return new SocialQueueResult(work.Count, nowCount, work.Count - nowCount, skipped, first, note);
     }
 
@@ -459,15 +512,16 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     }
 
     /// <summary>The next posting times (from Settings, India time) that no queued product holds yet. Reels have their own times.</summary>
-    private async Task<List<DateTime>> FreeSlotsAsync(SocialConfig c, int count, bool reel = false)
+    private async Task<List<DateTime>> FreeSlotsAsync(SocialConfig c, int count, Slot kind = Slot.Photo)
     {
         var result = new List<DateTime>();
         if (count <= 0) return result;
         var now = DateTime.UtcNow;
-        var taken = (await db.SocialPosts.Where(s => s.Status == SocialPostStatus.Queued && s.ScheduledAt > now && Reels.Contains(s.Platform) == reel)
+        var kinds = PlatformsOf(kind);
+        var taken = (await db.SocialPosts.Where(s => s.Status == SocialPostStatus.Queued && s.ScheduledAt > now && kinds.Contains(s.Platform))
                 .Select(s => s.ScheduledAt!.Value).ToListAsync())
             .Select(d => new DateTime(d.Year, d.Month, d.Day, d.Hour, d.Minute, 0, DateTimeKind.Utc)).ToHashSet();
-        var times = ParseTimes(reel ? c.ReelTimes : c.PostTimes);
+        var times = ParseTimes(kind switch { Slot.Reel => c.ReelTimes, Slot.Story => c.StoryTimes, _ => c.PostTimes });
         if (times.Count == 0) times = [new TimeSpan(11, 0, 0)];
         var today = TimeZoneInfo.ConvertTimeFromUtc(now, India).Date;
         for (var day = 0; result.Count < count && day < 3660; day++)
@@ -522,7 +576,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var c = await ConfigAsync();
         s.Status = SocialPostStatus.Queued; s.LastError = null;
         s.ScheduledAt = !InstagramKinds.Contains(s.Platform) || await RoomNowAsync(c, [s.Platform]) > 0
-            ? DateTime.UtcNow : (await FreeSlotsAsync(c, 1, IsReel(s.Platform)))[0];
+            ? DateTime.UtcNow : (await FreeSlotsAsync(c, 1, SlotOf(s.Platform)))[0];
         await db.SaveChangesAsync();
     }
 
@@ -612,7 +666,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var since = DateTime.UtcNow.AddHours(-24);
         var fb24 = await db.SocialPosts.CountAsync(s => s.Platform == SocialPlatform.Facebook && s.PublishedAt >= since);
         var next = await db.SocialPosts.Where(s => s.Status == SocialPostStatus.Queued).MinAsync(s => s.ScheduledAt);
-        var postedProducts = await db.SocialPosts.Where(s => Live.Contains(s.Status)).Select(s => s.ProductId).Distinct().CountAsync();
+        var postedProducts = await db.SocialPosts.Where(s => Live.Contains(s.Status) && !Stories.Contains(s.Platform)).Select(s => s.ProductId).Distinct().CountAsync();
         var publishable = await db.Products.CountAsync(p => p.IsActive && p.Images.Any(i => i.MediaType == MediaType.Image && i.LocalPath != null));
         return new
         {
@@ -669,7 +723,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (s.Platform == SocialPlatform.FacebookReel
             && await db.SocialPosts.CountAsync(x => x.Platform == SocialPlatform.FacebookReel && x.PublishedAt >= DateTime.UtcNow.AddHours(-24), ct) >= 30)
         {
-            s.ScheduledAt = (await FreeSlotsAsync(c, 1, reel: true))[0];
+            s.ScheduledAt = (await FreeSlotsAsync(c, 1, Slot.Reel))[0];
             s.LastError = "Facebook's limit of 30 reels in 24 hours was reached; moved to the next reel time.";
             await db.SaveChangesAsync(ct);
             return;
@@ -679,7 +733,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             var q = await QuotaAsync(c, fresh: true);
             if (q.Used >= q.Limit)
             {
-                s.ScheduledAt = (await FreeSlotsAsync(c, 1, IsReel(s.Platform)))[0];
+                s.ScheduledAt = (await FreeSlotsAsync(c, 1, SlotOf(s.Platform)))[0];
                 s.LastError = $"Instagram's limit of {q.Limit} posts in 24 hours was reached; moved to the next posting time.";
                 await db.SaveChangesAsync(ct);
                 return;
@@ -692,7 +746,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                 var (used, limit) = await threads.QuotaAsync(c.ThreadsUserId!, ThreadsToken(c), ct);
                 if (used >= limit)
                 {
-                    s.ScheduledAt = (await FreeSlotsAsync(c, 1))[0];
+                    s.ScheduledAt = (await FreeSlotsAsync(c, 1, SlotOf(s.Platform)))[0];
                     s.LastError = $"Threads' limit of {limit} posts in 24 hours was reached; moved to the next posting time.";
                     await db.SaveChangesAsync(ct);
                     return;
@@ -711,7 +765,15 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         try
         {
             PublishResult result;
-            if (IsReel(s.Platform))
+            if (IsStory(s.Platform))
+            {
+                var biz = await db.BusinessSettings.AsNoTracking().FirstAsync(ct);
+                var url = baseUrl + reels.MakeStory(p.Id, SocialCaption.Reel(p, c, biz), content.Photos[0]);
+                result = s.Platform == SocialPlatform.InstagramStory
+                    ? await meta.PublishInstagramStoryAsync(c.InstagramUserId!, Token(c), url, ct)
+                    : await meta.PublishFacebookStoryAsync(c.PageId!, Token(c), url, ct);
+            }
+            else if (IsReel(s.Platform))
             {
                 var biz = await db.BusinessSettings.AsNoTracking().FirstAsync(ct);
                 var reel = await reels.MakeAsync(p.Id, SocialCaption.Reel(p, c, biz), content.Photos, c.ReelMusic, ct);
@@ -739,6 +801,14 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             cache.Remove(QuotaKey);
             logger.LogInformation("Posted product {Product} to {Platform}: {Link}", p.Id, s.Platform, result.Permalink);
         }
+        catch (MetaException ex) when (ex.Processing && s.Attempts < 2)
+        {
+            // Instagram's processing sometimes fails once: try again in 15 minutes before calling it failed
+            s.Status = SocialPostStatus.Queued; s.ScheduledAt = DateTime.UtcNow.AddMinutes(15);
+            s.LastError = ex.Message + " Trying again in 15 minutes.";
+            await db.SaveChangesAsync(ct);
+            logger.LogWarning("Posting product {Product} to {Platform} failed once, retrying: {Why}", s.ProductId, s.Platform, ex.Message);
+        }
         catch (Exception ex) when (ex is MetaException or HttpRequestException or IOException or AppException)
         {
             await FailAsync(s, ex.Message, ct);
@@ -755,7 +825,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     {
         var c = await ConfigAsync();
         if (!AnyConnected(c)) return 0;
-        var q = db.SocialPosts.Where(s => Live.Contains(s.Status));
+        // Stories can't be edited and are gone in a day: never "out of date"
+        var q = db.SocialPosts.Where(s => Live.Contains(s.Status) && !Stories.Contains(s.Platform));
         if (productIds is not null) q = q.Where(s => productIds.Contains(s.ProductId));
         var posts = await q.ToListAsync(ct);
         if (posts.Count == 0) return 0;
@@ -803,6 +874,36 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             .OrderBy(p => p.Id).Select(p => p.Id).Take(200).ToListAsync(ct);
         if (ids.Count == 0) return 0;
         return (await QueueAsync(new SocialQueueRequest(ids))).Products;
+    }
+
+    internal const string AutoStoryNote = "Chosen automatically for a story.";
+
+    /// <summary>Settings → Stories: keeps the next two story times filled. Picks published products without a story in the
+    /// last week: festival offers first, then products posted in the last 3 days, then the longest without a story.</summary>
+    public async Task<int> AutoStoriesAsync(CancellationToken ct)
+    {
+        var c = await ConfigAsync();
+        if (!c.StoriesEnabled || !IsConnected(c)) return 0;
+        var platforms = Enabled(c).Where(IsStory).ToList();
+        if (platforms.Count == 0) return 0;
+        var now = DateTime.UtcNow;
+        var waitingTimes = await db.SocialPosts.Where(s => Stories.Contains(s.Platform) && s.Status == SocialPostStatus.Queued && s.ScheduledAt > now)
+            .Select(s => s.ScheduledAt).Distinct().CountAsync(ct);
+        var need = 2 - waitingTimes;
+        if (need <= 0) return 0;
+        var weekAgo = now.AddDays(-StoryGapDays);
+        var recent = now.AddDays(-3);
+        var picks = await db.Products.AsNoTracking()
+            .Where(p => p.IsActive && p.Images.Any(i => i.MediaType == MediaType.Image && i.LocalPath != null)
+                && !db.SocialPosts.Any(s => s.ProductId == p.Id && Stories.Contains(s.Platform)
+                    && (s.Status == SocialPostStatus.Queued || s.Status == SocialPostStatus.Publishing || s.PublishedAt > weekAgo)))
+            .OrderByDescending(p => p.OfferPrice != null)
+            .ThenByDescending(p => db.SocialPosts.Any(s => s.ProductId == p.Id && !Stories.Contains(s.Platform) && s.PublishedAt > recent))
+            .ThenBy(p => db.SocialPosts.Where(s => s.ProductId == p.Id && Stories.Contains(s.Platform)).Max(s => s.PublishedAt))
+            .ThenByDescending(p => p.Id)
+            .Select(p => p.Id).Take(need).ToListAsync(ct);
+        if (picks.Count == 0) return 0;
+        return (await QueueAsync(new SocialQueueRequest(picks, Platforms: platforms, Note: AutoStoryNote))).Products;
     }
 
     // ---------- Helpers ----------
@@ -881,7 +982,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         // Remove JPEGs of photos the product no longer uses (reel covers are ReelMaker's).
         var keep = made.Select(Path.GetFileName).ToHashSet();
         foreach (var f in Directory.GetFiles(storage.FullPath(folder), "*.jpg"))
-            if (!keep.Contains(Path.GetFileName(f)) && !Path.GetFileName(f).StartsWith("reel-")) try { File.Delete(f); } catch (IOException) { }
+            if (!keep.Contains(Path.GetFileName(f)) && !Path.GetFileName(f).StartsWith("reel-") && !Path.GetFileName(f).StartsWith("story-")) try { File.Delete(f); } catch (IOException) { }
         return made;
     }
 

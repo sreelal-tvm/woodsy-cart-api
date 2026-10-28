@@ -72,6 +72,14 @@ public class AdminSocialController(SocialService social, CatalogFeed feed, Socia
     [HttpPost("products/{id:int}/reel")]
     public Task<ReelFile> MakeReel(int id, bool music = true, bool remake = false) => social.MakeReelAsync(id, music, remake);
 
+    /// <summary>The product's story picture (1080×1920), made if needed.</summary>
+    [HttpPost("products/{id:int}/story")]
+    public async Task<object> MakeStory(int id) => new { image = await social.MakeStoryAsync(id) };
+
+    [HttpGet("products/{id:int}/story/file")]
+    public async Task<IActionResult> StoryFile(int id) =>
+        PhysicalFile(social.FullPath(await social.MakeStoryAsync(id)), "image/jpeg", $"woodsycart-{id}-story.jpg");
+
     /// <summary>The reel as a download (made first if needed).</summary>
     [HttpGet("products/{id:int}/reel/file")]
     public async Task<IActionResult> ReelFile(int id, bool music = true)

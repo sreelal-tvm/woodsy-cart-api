@@ -62,7 +62,8 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         }
         await db.SaveChangesAsync(ct);
 
-        foreach (var s in posts.Where(s => CommentsDue(s, now) && !issues.ContainsKey(Group(s.Platform) + ":comments"))
+        // Story replies arrive as messages, not comments
+        foreach (var s in posts.Where(s => !SocialService.IsStory(s.Platform) && CommentsDue(s, now) && !issues.ContainsKey(Group(s.Platform) + ":comments"))
                      .OrderBy(s => s.CommentsCheckedAt ?? DateTime.MinValue).Take(CallsPerRun))
         {
             try
@@ -88,6 +89,8 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     private static bool StatsDue(SocialPost s, DateTime now)
     {
         var age = now - s.PublishedAt!.Value;
+        // A story's numbers can only be read while it is up (24 hours): hourly, and once more just before it goes
+        if (SocialService.IsStory(s.Platform)) return age < TimeSpan.FromHours(24) && (s.StatsAt is null || now - s.StatsAt >= TimeSpan.FromHours(1));
         var every = age < TimeSpan.FromDays(1) ? TimeSpan.FromHours(1) : age < TimeSpan.FromDays(7) ? TimeSpan.FromHours(6) : TimeSpan.FromHours(24);
         return s.StatsAt is null || now - s.StatsAt >= every;
     }
@@ -103,6 +106,8 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     private Task<PostStats> StatsAsync(SocialPost s, SocialConfig c, CancellationToken ct) => s.Platform switch
     {
         SocialPlatform.Instagram or SocialPlatform.InstagramReel => meta.InstagramStatsAsync(s.ExternalId!, social.Token(c), ct),
+        SocialPlatform.InstagramStory => meta.InstagramStatsAsync(s.ExternalId!, social.Token(c), ct, story: true),
+        SocialPlatform.FacebookStory => Task.FromResult(new PostStats(null, null, null, null, null, null, false)),   // Facebook gives no story numbers
         SocialPlatform.Facebook or SocialPlatform.FacebookReel => meta.FacebookStatsAsync(s.ExternalId!, s.Platform == SocialPlatform.FacebookReel, social.Token(c), ct),
         _ => threads.StatsAsync(s.ExternalId!, social.ThreadsToken(c), ct)
     };
@@ -342,6 +347,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     private static string PlatformName(SocialPlatform p) => p switch
     {
         SocialPlatform.InstagramReel => "Instagram Reel", SocialPlatform.FacebookReel => "Facebook Reel", SocialPlatform.ThreadsVideo => "Threads video",
+        SocialPlatform.InstagramStory => "Instagram Story", SocialPlatform.FacebookStory => "Facebook Story",
         _ => p.ToString()
     };
 

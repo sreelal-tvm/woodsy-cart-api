@@ -35,6 +35,11 @@ public class SocialConfig : BaseEntity
     public string ReelTimes { get; set; } = "18:00";       // India time, one reel per time
     public bool ReelMusic { get; set; } = true;            // use an uploaded track (none uploaded = no music)
 
+    // Stories: a 9:16 picture of a product on Instagram and Facebook stories (gone after 24 hours). Automatic stories pick a
+    // product at each time (offers first, then recent posts, then the longest without a story); off = only by hand
+    public bool StoriesEnabled { get; set; }
+    public string StoryTimes { get; set; } = "19:00";      // India time, one story per time
+
     // Product feed for Meta Commerce Manager (catalog): public at /feeds/meta-catalog.csv while switched on
     public bool FeedEnabled { get; set; }
     public DateTime? FeedFetchedAt { get; set; }

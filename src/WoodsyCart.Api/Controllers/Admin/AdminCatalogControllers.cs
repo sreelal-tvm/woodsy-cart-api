@@ -107,7 +107,9 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
             };
             query = q.Social switch
             {
-                "not-posted" => query.Where(p => p.IsActive && !db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status))),
+                // Stories come and go; only feed posts and reels count as "posted"
+                "not-posted" => query.Where(p => p.IsActive && !db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status)
+                    && s.Platform != SocialPlatform.InstagramStory && s.Platform != SocialPlatform.FacebookStory)),
                 // Already on Instagram/Facebook but not on Threads yet (for catching up after connecting Threads)
                 "not-on-threads" => query.Where(p => p.IsActive
                     && !db.SocialPosts.Any(s => s.ProductId == p.Id && s.Platform == SocialPlatform.Threads && wanted.Contains(s.Status))),

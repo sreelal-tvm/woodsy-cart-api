@@ -2547,6 +2547,14 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<bool>("ShowMrp")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("StoriesEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("StoryTimes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<string>("Template")
                         .HasMaxLength(4000)
                         .HasColumnType("nvarchar(4000)");
