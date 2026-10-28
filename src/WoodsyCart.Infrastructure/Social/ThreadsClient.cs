@@ -11,7 +11,7 @@ public record ThreadsToken(string Token, DateTime ExpiresAt);
 /// </summary>
 public class ThreadsClient(IHttpClientFactory http, IConfiguration config)
 {
-    public const string Scopes = "threads_basic,threads_content_publish,threads_delete";
+    public const string Scopes = "threads_basic,threads_content_publish,threads_delete,threads_manage_insights,threads_read_replies,threads_manage_replies";
     private const string Host = "https://graph.threads.com/";
     private string Base => Host + (config["Social:ThreadsVersion"] ?? "v1.0") + "/";
     private HttpClient Client => http.CreateClient("meta");
@@ -92,6 +92,45 @@ public class ThreadsClient(IHttpClientFactory http, IConfiguration config)
     {
         using var res = await Client.DeleteAsync($"{Base}{id}?access_token={E(token)}", ct);
         await MetaClient.ReadAsync(res, ct);
+    }
+
+    // ---------- Performance and replies ----------
+
+    /// <summary>A post's views, likes, replies and shares (reposts + quotes + shares); needs threads_manage_insights.</summary>
+    public async Task<PostStats> StatsAsync(string mediaId, string token, CancellationToken ct = default)
+    {
+        try
+        {
+            Dictionary<string, long> m;
+            try { m = MetaClient.Metrics(await GetAsync($"{Base}{mediaId}/insights?metric=views,likes,replies,reposts,quotes,shares&access_token={E(token)}", ct)); }
+            // "views" and "shares" are newer metrics: without them if Threads refuses the list
+            catch (MetaException ex) when (ex.Code == 100) { m = MetaClient.Metrics(await GetAsync($"{Base}{mediaId}/insights?metric=likes,replies,reposts,quotes&access_token={E(token)}", ct)); }
+            int? shares = m.ContainsKey("reposts") || m.ContainsKey("quotes") || m.ContainsKey("shares")
+                ? (m.Num("reposts") ?? 0) + (m.Num("quotes") ?? 0) + (m.Num("shares") ?? 0) : null;
+            return new PostStats(m.Num("views"), null, m.Num("likes"), m.Num("replies"), shares, null, false);
+        }
+        catch (MetaException ex) when (ex.IsPermission) { return new PostStats(null, null, null, null, null, null, true); }
+    }
+
+    /// <summary>Every reply under a post, nested ones too (threads_read_replies). ParentId = the post or reply it answers.</summary>
+    public async Task<List<FetchedComment>> RepliesAsync(string mediaId, string token, CancellationToken ct = default)
+    {
+        var r = await GetAsync($"{Base}{mediaId}/conversation?fields=id,text,username,timestamp,replied_to,is_reply_owned_by_me&reverse=false&access_token={E(token)}", ct);
+        return r.GetProperty("data").EnumerateArray().Select(c =>
+        {
+            var parent = c.TryGetProperty("replied_to", out var rt) ? MetaClient.Str(rt, "id") : null;
+            var mine = c.TryGetProperty("is_reply_owned_by_me", out var o) && o.ValueKind == JsonValueKind.True;
+            return new FetchedComment(MetaClient.Str(c, "id")!, parent == mediaId ? null : parent, MetaClient.Str(c, "username") ?? "Threads user", null,
+                MetaClient.Str(c, "text") ?? "", MetaClient.ParseTime(MetaClient.Str(c, "timestamp")), mine);
+        }).ToList();
+    }
+
+    /// <summary>Replies to a Threads reply (threads_manage_replies). Returns the new reply's id.</summary>
+    public async Task<string> ReplyAsync(string userId, string token, string replyToId, string text, CancellationToken ct = default)
+    {
+        var container = await PostIdAsync($"{userId}/threads", token, new() { ["media_type"] = "TEXT", ["text"] = text, ["reply_to_id"] = replyToId }, ct);
+        await WaitReadyAsync(container, token, ct);
+        return await PostIdAsync($"{userId}/threads_publish", token, new() { ["creation_id"] = container }, ct);
     }
 
     private async Task WaitReadyAsync(string containerId, string token, CancellationToken ct, int attempts = 40)

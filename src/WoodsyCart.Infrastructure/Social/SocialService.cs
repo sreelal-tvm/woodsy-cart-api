@@ -33,11 +33,16 @@ public record SocialConnectResult(bool Connected, List<SocialPageChoice>? Pages,
 public record SocialQueueRequest(List<int> ProductIds, bool Now = false, List<SocialPlatform>? Platforms = null);
 public record SocialQueueResult(int Products, int PostingNow, int Scheduled, int Skipped, DateTime? FirstSlot, string? Note);
 public record SocialPlatformState(SocialPlatform Platform, bool Enabled, int? PostId, SocialPostStatus? Status, DateTime? ScheduledAt,
-    DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, string? PostedCaption, bool CustomCaption);
+    DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, string? PostedCaption, bool CustomCaption, SocialStats? Stats = null);
 public record SocialProductDto(int ProductId, string Caption, string Code, List<string> Photos, bool Connected, bool Publishable, List<SocialPlatformState> Platforms,
     string ThreadsCaption);
 public record SocialPostRow(int Id, int ProductId, string ProductName, string? Image, SocialPlatform Platform, SocialPostStatus Status,
-    DateTime? ScheduledAt, DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, bool CustomCaption);
+    DateTime? ScheduledAt, DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, bool CustomCaption, SocialStats? Stats = null);
+/// <summary>A live post's numbers (null = not given by that platform), and when they were read.</summary>
+public record SocialStats(int? Views, int? Reach, int? Likes, int? Comments, int? Shares, int? Saves, DateTime? At)
+{
+    public static SocialStats? Of(SocialPost? s) => s?.StatsAt is null ? null : new(s.Views, s.Reach, s.Likes, s.Comments, s.Shares, s.Saves, s.StatsAt);
+}
 public record SocialQuota(SocialPlatform Platform, int Used, int Limit, bool FromMeta);
 
 /// <summary>
@@ -50,12 +55,12 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
 {
     public const int PhotoWidth = 1080, PhotoHeight = 1350;     // 4:5 portrait: the most screen space in the feed
     private readonly IDataProtector _protector = dp.CreateProtector("WoodsyCart.SocialSecrets.v1");
-    private static readonly SocialPostStatus[] Live = [SocialPostStatus.Published, SocialPostStatus.OutOfDate];
+    internal static readonly SocialPostStatus[] Live = [SocialPostStatus.Published, SocialPostStatus.OutOfDate];
     private static readonly SocialPostStatus[] Taken = [SocialPostStatus.Queued, SocialPostStatus.Publishing, SocialPostStatus.Published, SocialPostStatus.OutOfDate];
     private static readonly SocialPlatform[] Reels = [SocialPlatform.InstagramReel, SocialPlatform.FacebookReel, SocialPlatform.ThreadsVideo];
-    private static readonly SocialPlatform[] ThreadsKinds = [SocialPlatform.Threads, SocialPlatform.ThreadsVideo];
-    private static bool IsThreads(SocialPlatform p) => ThreadsKinds.Contains(p);
-    private static readonly SocialPlatform[] InstagramKinds = [SocialPlatform.Instagram, SocialPlatform.InstagramReel];
+    internal static readonly SocialPlatform[] ThreadsKinds = [SocialPlatform.Threads, SocialPlatform.ThreadsVideo];
+    internal static bool IsThreads(SocialPlatform p) => ThreadsKinds.Contains(p);
+    internal static readonly SocialPlatform[] InstagramKinds = [SocialPlatform.Instagram, SocialPlatform.InstagramReel];
     private static bool IsReel(SocialPlatform p) => Reels.Contains(p);
 
     // ---------- Settings & connection ----------
@@ -130,6 +135,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var c = await ConfigAsync();
         c.MetaAppId = r.AppId.Trim(); c.PageId = page.Id; c.PageName = page.Name; c.PageTokenProtected = _protector.Protect(page.Token);
         c.InstagramUserId = page.InstagramId; c.InstagramUsername = page.InstagramUsername; c.ConnectedAt = DateTime.UtcNow;
+        c.EngagementIssues = SocialEngagement.ClearIssues(c.EngagementIssues, "Meta");   // the new token may have the missing permissions
         await db.SaveChangesAsync();
         cache.Remove(QuotaKey);
         return new SocialConnectResult(true, null, page.InstagramId is null
@@ -171,6 +177,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             c.ThreadsAppId = app.AppId; c.ThreadsUserId = userId; c.ThreadsUsername = username;
             c.ThreadsTokenProtected = _protector.Protect(token.Token); c.ThreadsTokenExpiresAt = token.ExpiresAt;
             c.ThreadsTokenRefreshedAt = DateTime.UtcNow; c.ThreadsConnectedAt = DateTime.UtcNow;
+            c.EngagementIssues = SocialEngagement.ClearIssues(c.EngagementIssues, "Threads");
             await db.SaveChangesAsync();
             return Back("threads=connected");
         }
@@ -214,11 +221,11 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     private string? ThreadsCallback() => PublicBase() is { } b ? b + "/api/social/threads/callback" : null;
 
     /// <summary>Facebook Page (and Instagram) connected.</summary>
-    private static bool IsConnected(SocialConfig c) => c.PageTokenProtected is not null && c.PageId is not null;
-    private static bool ThreadsConnected(SocialConfig c) => c.ThreadsTokenProtected is not null && c.ThreadsUserId is not null;
+    internal static bool IsConnected(SocialConfig c) => c.PageTokenProtected is not null && c.PageId is not null;
+    internal static bool ThreadsConnected(SocialConfig c) => c.ThreadsTokenProtected is not null && c.ThreadsUserId is not null;
     private static bool AnyConnected(SocialConfig c) => IsConnected(c) || ThreadsConnected(c);
-    private string Token(SocialConfig c) => _protector.Unprotect(c.PageTokenProtected!);
-    private string ThreadsToken(SocialConfig c) => _protector.Unprotect(c.ThreadsTokenProtected!);
+    internal string Token(SocialConfig c) => _protector.Unprotect(c.PageTokenProtected!);
+    internal string ThreadsToken(SocialConfig c) => _protector.Unprotect(c.ThreadsTokenProtected!);
 
     private static List<SocialPlatform> Enabled(SocialConfig c)
     {
@@ -272,7 +279,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                 : SocialCaption.Build(p, c, biz, s.CaptionOverride, plain.Photos, IsThreads(pl), email.StorefrontUrl);
             var changes = s is { Status: SocialPostStatus.OutOfDate } ? SocialCaption.Changes(s.PostedSnapshot, now.Snapshot) : [];
             return new SocialPlatformState(pl, enabled.Contains(pl), s?.Id, s?.Status, s?.ScheduledAt, s?.PublishedAt, s?.Permalink, s?.LastError,
-                changes, s?.PostedCaption, s?.CaptionOverride is not null);
+                changes, s?.PostedCaption, s?.CaptionOverride is not null, SocialStats.Of(s));
         }).ToList();
         return new SocialProductDto(p.Id, plain.Caption, SocialCaption.Code(p.Id), plain.Photos, AnyConnected(c),
             p.IsActive && plain.Photos.Count > 0, platforms, threadsPlain.Caption);
@@ -500,7 +507,9 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             catch (MetaException ex) { throw new AppException($"Couldn't delete the {s.Platform} post: " + ex.Message); }
         }
         s.Status = SocialPostStatus.Removed; s.ExternalId = null; s.Permalink = null; s.PublishedAt = null; s.ScheduledAt = null; s.LastError = null;
+        ForgetEngagement(s);
         await db.SaveChangesAsync();
+        await db.SocialComments.Where(x => x.SocialPostId == s.Id).ExecuteDeleteAsync();
     }
 
     /// <summary>Try a failed post again now (or at the next free time when the daily limit is used up).</summary>
@@ -552,7 +561,9 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             catch (MetaException ex) when (ex.Code is not 190) { throw new AppException("Couldn't delete the old post: " + ex.Message); }
         }
         s.Status = SocialPostStatus.Queued; s.ScheduledAt = DateTime.UtcNow; s.ExternalId = null; s.Permalink = null; s.PublishedAt = null;
+        ForgetEngagement(s);
         await db.SaveChangesAsync();
+        await db.SocialComments.Where(x => x.SocialPostId == s.Id).ExecuteDeleteAsync();
     }
 
     // ---------- Lists ----------
@@ -585,7 +596,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         return new PagedResult<SocialPostRow>
         {
             Items = rows.Select(r => new SocialPostRow(r.Post.Id, r.Post.ProductId, r.Name, r.Image, r.Post.Platform, r.Post.Status, r.Post.ScheduledAt,
-                r.Post.PublishedAt, r.Post.Permalink, r.Post.LastError, changes.GetValueOrDefault(r.Post.Id) ?? [], r.Post.CaptionOverride is not null)).ToList(),
+                r.Post.PublishedAt, r.Post.Permalink, r.Post.LastError, changes.GetValueOrDefault(r.Post.Id) ?? [], r.Post.CaptionOverride is not null,
+                SocialStats.Of(r.Post))).ToList(),
             Total = total, Page = page, PageSize = pageSize
         };
     }
@@ -607,6 +619,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             threads = ThreadsConnected(c) ? c.ThreadsUsername : null,
             enabled = Enabled(c), quota = await QuotaAsync(c), threadsQuota = ThreadsConnected(c) ? await ThreadsQuotaAsync(c) : null,
             facebookLast24h = fb24, nextPostAt = next,
+            unreadComments = await db.SocialComments.CountAsync(x => x.ParentId == null && x.ReadAt == null),
             postedProducts, notPosted = Math.Max(0, publishable - postedProducts),
             counts = counts.GroupBy(x => x.Platform.ToString()).ToDictionary(g => g.Key, g => g.ToDictionary(x => x.Status.ToString(), x => x.Count))
         };
@@ -796,6 +809,13 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         ? threads.DeleteAsync(s.ExternalId!, ThreadsToken(c))
         : meta.DeleteAsync(s.ExternalId!, Token(c));
 
+    /// <summary>The old post's numbers and comments go with it.</summary>
+    private static void ForgetEngagement(SocialPost s)
+    {
+        s.Views = s.Reach = s.Likes = s.Comments = s.Shares = s.Saves = null;
+        s.StatsAt = null; s.CommentsCheckedAt = null;
+    }
+
     private static void Apply(SocialPost s, PostContent content)
     {
         s.PostedCaption = content.Caption;
@@ -813,7 +833,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         logger.LogWarning("Posting product {Product} to {Platform} failed: {Why}", s.ProductId, s.Platform, why);
     }
 
-    private async Task NotifyAsync(string subject, string html)
+    internal async Task NotifyAsync(string subject, string html)
     {
         try { await email.AdminsAsync(Email.EmailEvent.AdminSocialProblem, subject, subject, html, ("Open social media", email.AdminUrl + "/social")); }
         catch (Exception ex) { logger.LogWarning(ex, "Could not email the social media problem"); }

@@ -2385,6 +2385,68 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.ToTable("ServiceablePincodes");
                 });
 
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.SocialComment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Author")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("FromUs")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("LastActivityAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("ParentId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Platform")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("PostedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ReadAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("SocialPostId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(2200)
+                        .HasColumnType("nvarchar(2200)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SocialPostId");
+
+                    b.HasIndex("ParentId", "ReadAt");
+
+                    b.HasIndex("Platform", "ExternalId")
+                        .IsUnique();
+
+                    b.ToTable("SocialComments");
+                });
+
             modelBuilder.Entity("WoodsyCart.Domain.Entities.SocialConfig", b =>
                 {
                     b.Property<int>("Id")
@@ -2403,11 +2465,18 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<DateTime?>("CommentsEmailedAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<DateTime?>("ConnectedAt")
                         .HasColumnType("datetime2");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("EngagementIssues")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
 
                     b.Property<bool>("FacebookEnabled")
                         .HasColumnType("bit");
@@ -2545,6 +2614,12 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(2200)
                         .HasColumnType("nvarchar(2200)");
 
+                    b.Property<int?>("Comments")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("CommentsCheckedAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("ContentHash")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
@@ -2559,6 +2634,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<string>("LastError")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int?>("Likes")
+                        .HasColumnType("int");
 
                     b.Property<string>("Permalink")
                         .HasMaxLength(500)
@@ -2584,7 +2662,19 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<DateTime?>("PublishedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<int?>("Reach")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("Saves")
+                        .HasColumnType("int");
+
                     b.Property<DateTime?>("ScheduledAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("Shares")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("StatsAt")
                         .HasColumnType("datetime2");
 
                     b.Property<int>("Status")
@@ -2592,6 +2682,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<int?>("Views")
+                        .HasColumnType("int");
 
                     b.HasKey("Id");
 
@@ -3192,6 +3285,24 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Navigation("Product");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.SocialComment", b =>
+                {
+                    b.HasOne("WoodsyCart.Domain.Entities.SocialComment", "Parent")
+                        .WithMany()
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("WoodsyCart.Domain.Entities.SocialPost", "Post")
+                        .WithMany()
+                        .HasForeignKey("SocialPostId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Parent");
+
+                    b.Navigation("Post");
                 });
 
             modelBuilder.Entity("WoodsyCart.Domain.Entities.SocialPost", b =>

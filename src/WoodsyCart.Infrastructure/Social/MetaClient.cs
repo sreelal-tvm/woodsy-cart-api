@@ -9,10 +9,16 @@ public class MetaException(string message, int? code = null) : Exception(message
     public int? Code { get; } = code;
     /// <summary>The token was revoked or expired (Meta error 190): reconnect in Admin.</summary>
     public bool TokenInvalid => Code == 190;
+    /// <summary>The token lacks a permission (Meta error 10 or 200-299).</summary>
+    public bool IsPermission => Code is 10 or (>= 200 and < 300);
 }
 
 public record MetaPage(string Id, string Name, string Token, string? InstagramId, string? InstagramUsername);
 public record PublishResult(string Id, string? Permalink);
+/// <summary>A post's numbers; null = the platform doesn't give it. NeedsPermission = some numbers need a permission not granted yet.</summary>
+public record PostStats(int? Views, int? Reach, int? Likes, int? Comments, int? Shares, int? Saves, bool NeedsPermission);
+/// <summary>A comment as the platform gives it. ParentId = the comment it answers (null = on the post itself).</summary>
+public record FetchedComment(string Id, string? ParentId, string Author, string? AuthorId, string Text, DateTime At, bool? Mine);
 
 /// <summary>
 /// The few Graph API calls WoodsyCart needs: connect a Page (and its linked Instagram account), publish photo posts,
@@ -162,6 +168,139 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
         await ReadAsync(res, ct);
     }
 
+    // ---------- Performance ----------
+
+    /// <summary>Instagram post or reel numbers. Views, reach, saves and shares need instagram_manage_insights; likes and
+    /// comments come from the post itself when that permission is missing (<see cref="PostStats.NeedsPermission"/>).</summary>
+    public async Task<PostStats> InstagramStatsAsync(string mediaId, string token, CancellationToken ct = default)
+    {
+        try
+        {
+            var m = Metrics(await GetAsync($"{mediaId}/insights?metric=views,reach,likes,comments,saved,shares", token, ct));
+            return new PostStats(m.Num("views"), m.Num("reach"), m.Num("likes"), m.Num("comments"), m.Num("shares"), m.Num("saved"), false);
+        }
+        catch (MetaException ex) when (ex.IsPermission || ex.Code == 100)
+        {
+            var r = await GetAsync($"{mediaId}?fields=like_count,comments_count", token, ct);
+            return new PostStats(null, null, Int(r, "like_count"), Int(r, "comments_count"), null, null, ex.IsPermission);
+        }
+    }
+
+    /// <summary>Facebook Page post (or reel, by its video id) numbers: reactions, comments and shares from the post; views
+    /// and reach from its insights (read_insights).</summary>
+    public async Task<PostStats> FacebookStatsAsync(string id, bool reel, string token, CancellationToken ct = default)
+    {
+        var r = await GetAsync(reel
+            ? $"{id}?fields=likes.summary(true).limit(0),comments.summary(true).limit(0)"
+            : $"{id}?fields=reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),shares", token, ct);
+        int? Total(string field) => r.TryGetProperty(field, out var f) && f.TryGetProperty("summary", out var s) ? Int(s, "total_count") : null;
+        var likes = Total(reel ? "likes" : "reactions");
+        var comments = Total("comments");
+        int? shares = r.TryGetProperty("shares", out var sh) ? Int(sh, "count") : reel ? null : 0;
+        int? views = null, reach = null;
+        var missing = false;
+        try
+        {
+            if (reel)
+            {
+                var m = Metrics(await GetAsync($"{id}/video_insights?metric=blue_reels_play_count,post_impressions_unique", token, ct));
+                views = m.Num("blue_reels_play_count"); reach = m.Num("post_impressions_unique");
+            }
+            else
+            {
+                // Meta replaced "impressions" with "media views" in November 2025
+                var m = Metrics(await GetAsync($"{id}/insights?metric=post_media_view,post_total_media_view_unique", token, ct));
+                views = m.Num("post_media_view"); reach = m.Num("post_total_media_view_unique");
+            }
+        }
+        catch (MetaException ex) when (ex.IsPermission || ex.Code == 100) { missing = ex.IsPermission; }
+        return new PostStats(views, reach, likes, comments, shares, null, missing);
+    }
+
+    // ---------- Comments ----------
+
+    /// <summary>Comments on an Instagram post with their replies (instagram_manage_comments).</summary>
+    public async Task<List<FetchedComment>> InstagramCommentsAsync(string mediaId, string token, CancellationToken ct = default)
+    {
+        var list = new List<FetchedComment>();
+        var r = await GetAsync($"{mediaId}/comments?fields=id,text,username,timestamp,replies{{id,text,username,timestamp}}&limit=50", token, ct);
+        foreach (var c in r.GetProperty("data").EnumerateArray())
+        {
+            var top = Comment(c, null, "text", "username");
+            list.Add(top);
+            if (c.TryGetProperty("replies", out var rep) && rep.TryGetProperty("data", out var rd))
+                list.AddRange(rd.EnumerateArray().Select(x => Comment(x, top.Id, "text", "username")));
+        }
+        return list;
+    }
+
+    /// <summary>Comments on a Facebook Page post or reel with their replies. The commenter's name needs pages_read_user_content.</summary>
+    public async Task<List<FetchedComment>> FacebookCommentsAsync(string id, string token, CancellationToken ct = default)
+    {
+        var list = new List<FetchedComment>();
+        var r = await GetAsync($"{id}/comments?fields=id,message,created_time,from{{id,name}},comments.limit(50){{id,message,created_time,from{{id,name}}}}&filter=toplevel&limit=50", token, ct);
+        foreach (var c in r.GetProperty("data").EnumerateArray())
+        {
+            var top = Comment(c, null, "message", null);
+            list.Add(top);
+            if (c.TryGetProperty("comments", out var rep) && rep.TryGetProperty("data", out var rd))
+                list.AddRange(rd.EnumerateArray().Select(x => Comment(x, top.Id, "message", null)));
+        }
+        return list;
+    }
+
+    /// <summary>Replies to an Instagram comment (instagram_manage_comments).</summary>
+    public Task<string> ReplyInstagramAsync(string commentId, string token, string message, CancellationToken ct = default) =>
+        PostIdAsync($"{commentId}/replies", token, new() { ["message"] = message }, ct);
+
+    /// <summary>Replies to a Facebook comment as the Page (pages_manage_engagement).</summary>
+    public Task<string> ReplyFacebookAsync(string commentId, string token, string message, CancellationToken ct = default) =>
+        PostIdAsync($"{commentId}/comments", token, new() { ["message"] = message }, ct);
+
+    private static FetchedComment Comment(JsonElement c, string? parent, string textField, string? userField)
+    {
+        string author; string? authorId = null;
+        if (userField is not null) author = Str(c, userField) ?? "Instagram user";
+        else if (c.TryGetProperty("from", out var f)) { author = Str(f, "name") ?? "Facebook user"; authorId = Str(f, "id"); }
+        else author = "Facebook user";
+        return new FetchedComment(Str(c, "id")!, parent, author, authorId, Str(c, textField) ?? "",
+            ParseTime(Str(c, "timestamp") ?? Str(c, "created_time")), null);
+    }
+
+    // ---------- Reading answers ----------
+
+    /// <summary>Insights answers: {"data":[{"name":"views","values":[{"value":12}]}]} (or "total_value") → name → number.</summary>
+    internal static Dictionary<string, long> Metrics(JsonElement r)
+    {
+        var d = new Dictionary<string, long>();
+        if (!r.TryGetProperty("data", out var data)) return d;
+        foreach (var m in data.EnumerateArray())
+        {
+            var name = Str(m, "name");
+            if (name is null) continue;
+            JsonElement v = default;
+            if (m.TryGetProperty("values", out var vals) && vals.GetArrayLength() > 0) vals[0].TryGetProperty("value", out v);
+            else if (m.TryGetProperty("total_value", out var tv)) tv.TryGetProperty("value", out v);
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n)) d[name] = n;
+        }
+        return d;
+    }
+
+    internal static int? Int(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : null;
+
+    internal static string? Str(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    /// <summary>Meta's times look like 2026-10-28T10:15:00+0000.</summary>
+    internal static DateTime ParseTime(string? s)
+    {
+        if (s is null) return DateTime.UtcNow;
+        if (System.Text.RegularExpressions.Regex.IsMatch(s, @"[+-]\d{4}$")) s = s[..^2] + ":" + s[^2..];
+        return DateTimeOffset.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var d)
+            ? d.UtcDateTime : DateTime.UtcNow;
+    }
+
     // ---------- HTTP ----------
 
     private async Task<string> PostIdAsync(string path, string token, Dictionary<string, string> form, CancellationToken ct) =>
@@ -201,4 +340,9 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
     }
 
     private static string E(string s) => Uri.EscapeDataString(s);
+}
+
+internal static class MetricsExtensions
+{
+    public static int? Num(this Dictionary<string, long> d, string name) => d.TryGetValue(name, out var v) ? (int)Math.Min(v, int.MaxValue) : null;
 }

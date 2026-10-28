@@ -10,7 +10,7 @@ public record FeedSwitch(bool Enabled);
 
 /// <summary>Admin → Social media: Instagram, Facebook and Threads posting of products (one post per product per platform).</summary>
 [Route("api/admin/social")]
-public class AdminSocialController(SocialService social, CatalogFeed feed) : AdminControllerBase
+public class AdminSocialController(SocialService social, CatalogFeed feed, SocialEngagement engagement) : AdminControllerBase
 {
     [HttpGet("summary")]
     public Task<object> Summary() => social.SummaryAsync();
@@ -33,6 +33,30 @@ public class AdminSocialController(SocialService social, CatalogFeed feed) : Adm
 
     [HttpPost("threads/disconnect")]
     public async Task<IActionResult> DisconnectThreads() { await social.DisconnectThreadsAsync(); return NoContent(); }
+
+    /// <summary>Views, likes, comments and shares per platform for posts of the last <paramref name="days"/> days, and the best posts.</summary>
+    [HttpGet("performance")]
+    public Task<SocialPerformance> Performance(int days = 30) => engagement.PerformanceAsync(days);
+
+    /// <summary>Comment conversations on our posts (unread = new comments since you last looked).</summary>
+    [HttpGet("comments")]
+    public Task<PagedResult<SocialCommentDto>> Comments(bool unread = false, string? account = null, int page = 1, int pageSize = 20) =>
+        engagement.ListAsync(unread, account, page, pageSize);
+
+    [HttpGet("comments/unread")]
+    public async Task<object> UnreadComments() => new { count = await engagement.UnreadAsync() };
+
+    [HttpGet("comments/issues")]
+    public Task<List<string>> EngagementIssues() => engagement.IssuesAsync();
+
+    [HttpPost("comments/{id:int}/reply")]
+    public Task<SocialReplyDto> Reply(int id, SocialReplyRequest r) => engagement.ReplyAsync(id, r.Text);
+
+    [HttpPost("comments/{id:int}/read")]
+    public async Task<IActionResult> MarkRead(int id, bool read = true) { await engagement.MarkReadAsync(id, read); return NoContent(); }
+
+    [HttpPost("comments/read-all")]
+    public async Task<object> MarkAllRead() => new { count = await engagement.MarkAllReadAsync() };
 
     /// <summary>Queue and posted lists.</summary>
     [HttpGet("posts")]

@@ -74,6 +74,7 @@ public static class DependencyInjection
         services.AddScoped<Social.ThreadsClient>();
         services.AddScoped<Social.ReelMaker>();
         services.AddScoped<Social.CatalogFeed>();
+        services.AddScoped<Social.SocialEngagement>();
         services.AddScoped<Social.SocialService>();
         services.AddHostedService<Social.SocialWorker>();
         services.AddScoped<VendorSyncService>();

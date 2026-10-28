@@ -5,7 +5,8 @@ using Microsoft.Extensions.Logging;
 namespace WoodsyCart.Infrastructure.Social;
 
 /// <summary>Every minute: posts what is due. Every 10 minutes: queues new products (if switched on) and checks live posts
-/// against their products (Facebook text updated, Instagram and Threads marked out of date); renews the Threads token weekly.</summary>
+/// against their products (Facebook text updated, Instagram and Threads marked out of date), reads views, likes and comments;
+/// renews the Threads token weekly.</summary>
 public class SocialWorker(IServiceScopeFactory scopes, ILogger<SocialWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -26,6 +27,9 @@ public class SocialWorker(IServiceScopeFactory scopes, ILogger<SocialWorker> log
                     // Catalog feed photos: a few products at a time so the first run doesn't load the server
                     await scope.ServiceProvider.GetRequiredService<CatalogFeed>().PrepareImagesAsync(40, stoppingToken);
                     await social.RefreshAsync(ct: stoppingToken);
+                    // Views, likes and comments of live posts (each post only when it is due)
+                    try { await scope.ServiceProvider.GetRequiredService<SocialEngagement>().RefreshAsync(stoppingToken); }
+                    catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { logger.LogError(ex, "Reading social media numbers and comments failed"); }
                 }
                 await social.PublishDueAsync(stoppingToken);
             }

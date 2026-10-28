@@ -40,6 +40,11 @@ public class SocialConfig : BaseEntity
     public DateTime? FeedFetchedAt { get; set; }
     public string? FeedFetchedBy { get; set; }
 
+    // Performance and comments: problems reading them (usually a permission not granted yet), as JSON {"Meta:stats": "…"};
+    // cleared when that account is connected again
+    public string? EngagementIssues { get; set; }
+    public DateTime? CommentsEmailedAt { get; set; }      // last "new comments" email (at most one every 30 minutes)
+
     // Caption
     public string? Template { get; set; }                 // null = built-in template
     public bool IncludePrice { get; set; } = true;
@@ -73,4 +78,32 @@ public class SocialPost : BaseEntity
     public int PhotoCount { get; set; }
     public string? LastError { get; set; }
     public int Attempts { get; set; }
+
+    // Performance, read from the platform now and then (null = the platform doesn't give that number)
+    public int? Views { get; set; }
+    public int? Reach { get; set; }
+    public int? Likes { get; set; }
+    public int? Comments { get; set; }
+    public int? Shares { get; set; }
+    public int? Saves { get; set; }
+    public DateTime? StatsAt { get; set; }
+    public DateTime? CommentsCheckedAt { get; set; }
+}
+
+/// <summary>A comment on one of our posts (or a reply under it). Replies point at the top comment of their conversation;
+/// the top comment carries the read state for the whole conversation.</summary>
+public class SocialComment : BaseEntity
+{
+    public int SocialPostId { get; set; }
+    public SocialPost? Post { get; set; }
+    public SocialPlatform Platform { get; set; }
+    public string ExternalId { get; set; } = "";
+    public int? ParentId { get; set; }                     // the top comment; null = this is a top comment
+    public SocialComment? Parent { get; set; }
+    public string Author { get; set; } = "";
+    public string Text { get; set; } = "";
+    public DateTime PostedAt { get; set; }                 // UTC, as the platform reports it
+    public bool FromUs { get; set; }                       // our own reply (from Admin or the app)
+    public DateTime? ReadAt { get; set; }                  // top comments only: null = new activity to look at
+    public DateTime LastActivityAt { get; set; }           // top comments only: newest comment in the conversation
 }
