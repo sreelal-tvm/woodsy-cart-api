@@ -57,7 +57,7 @@ public partial class CommentAssistant(ILogger<CommentAssistant> logger)
     /// <summary>Older models reject the effort setting.</summary>
     private static bool TakesEffort(string model) => !Regex.IsMatch(model, @"claude-3|haiku-4|sonnet-4-5|sonnet-4-0|sonnet-4-1|opus-4-0|opus-4-1|opus-4-5|(opus|sonnet)-4$");
 
-    public enum Topic { Price, Size, Colour, Material, Delivery, Payment, Assembly, Warranty, Stock, Order }
+    public enum Topic { Price, Size, Colour, Variants, Material, Delivery, Area, Payment, Assembly, Warranty, Stock, Order }
 
     // ---------- Rules ----------
 
@@ -65,7 +65,8 @@ public partial class CommentAssistant(ILogger<CommentAssistant> logger)
     [
         (Topic.Price, Words(@"price|prices|pp|pls price|rate|rates|cost|costs|amount|how much|howmuch|mrp|kitna|kitne|kitni|kimat|keemat|qeemat|daam|bele|vila|vilai|dhara|dhar|evvalavu|ethra|entha|₹|rs|inr|offer price|discount")),
         (Topic.Size, Words(@"size|sizes|dimension|dimensions|measurement|measurements|length|width|breadth|height|depth|how big|inch|inches|feet|ft|cm|lambai|chaudai")),
-        (Topic.Colour, Words(@"colou?rs?|shades?|rang|finish|finishes")),
+        (Topic.Colour, Words(@"colou?rs?|shades?|rang|finish|finishes|white|black|brown|grey|gray|walnut|wenge|beige|blue|green|red|cream|honey|natural")),
+        (Topic.Variants, Words(@"variants?|options?|models?|types?|designs?|other sizes")),
         (Topic.Material, Words(@"material|wood|wooden|teak|sheesham|rosewood|engineered|plywood|mdf|particle ?board|metal|steel|made of|quality")),
         (Topic.Delivery, Words(@"delivery|deliver|delivered|shipping|ship|pincode|pin code|how many days|when will")),
         (Topic.Payment, Words(@"cod|cash on delivery|emi|no cost emi|payment|pay|upi|card|installments?")),
@@ -74,6 +75,10 @@ public partial class CommentAssistant(ILogger<CommentAssistant> logger)
         (Topic.Stock, Words(@"available|availability|in stock|stock|sold out")),
         (Topic.Order, Words(@"how to (buy|order)|order|buy|purchase|link|website|where (can|to)|dm|details|info"))
     ];
+
+    /// <summary>"Available in Kerala?", "deliver to Chennai?", a pincode: whether we deliver there is for a person to confirm.</summary>
+    private static readonly Regex Place = new(@"(?<![\p{L}\p{N}])(available|avail|deliver\w*|ship\w*|send|come)\s+(in|to|at)\s+(?!(stock|other|more|all|any|different|this|that|it|small|big|large|medium|king|queen|single|double|white|black|brown|grey|gray|walnut|teak|oak|wenge|beige|blue|green|red|cream|honey|natural|colou?rs?|sizes?|shades?|days?|weeks?)(?![\p{L}\p{N}]))\p{L}+|(?<![\p{L}\p{N}])(pin ?code|\d{6})(?![\p{L}\p{N}])",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>Complaints, refunds and anger go to a person, never to the assistant.</summary>
     private static readonly Regex Unhappy = Words(@"worst|bad|fraud|scam|cheat\w*|fake|complain\w*|refund|return|broken|damaged?|not received|never received|poor|waste|angry|disappointed|useless|issue|problem|late|delay\w*|rude|pathetic|bekar|bakwas|ghatiya");
@@ -85,6 +90,9 @@ public partial class CommentAssistant(ILogger<CommentAssistant> logger)
     {
         var t = text.ToLowerInvariant();
         var topics = Rules.Where(r => r.Words.IsMatch(t)).Select(r => r.Topic).ToList();
+        if (Place.IsMatch(t)) { topics.Remove(Topic.Delivery); topics.Remove(Topic.Stock); topics.Insert(0, Topic.Area); }
+        // "Colours available?", "COD available?": "available" belongs to the other question, it doesn't ask about stock
+        if (topics.Count > 1 && topics.Any(x => x is not (Topic.Stock or Topic.Order))) topics.Remove(Topic.Stock);
         // "Order" alone ("dm", "details") is a buying signal: answer it with the price and how to order
         if (topics is [Topic.Order]) topics.Insert(0, Topic.Price);
         return (topics, Unhappy.IsMatch(t));
@@ -116,6 +124,16 @@ public partial class CommentAssistant(ILogger<CommentAssistant> logger)
                         1 => $"Colour: {f.Colours[0]}",
                         _ => $"Colours: {string.Join(", ", f.Colours)}"
                     });
+                    break;
+                case Topic.Variants:
+                    if (f.Colours.Count > 0) lines.Add(f.Colours.Count == 1 ? $"Colour: {f.Colours[0]}" : $"Colours: {string.Join(", ", f.Colours)}");
+                    lines.AddRange(f.Options);
+                    if (f.Colours.Count == 0 && f.Options.Count == 0) lines.Add("It comes as shown in the photos.");
+                    break;
+                case Topic.Area:
+                    // Where we deliver is never promised automatically
+                    lines.Add($"We deliver in {f.City}. Send us your pincode and we'll check your area for you.");
+                    complete = false;
                     break;
                 case Topic.Material:
                     if (f.Material is { } m) lines.Add($"Material: {m}");

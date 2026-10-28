@@ -375,7 +375,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var store = (email.StorefrontUrl ?? "https://woodsycart.com").TrimEnd('/');
         return new ProductFacts(p.Id, p.Name.Trim(), SocialCaption.Code(p.Id), (range ? "from " : "") + Money(shown),
             mrp ? Money(p.Mrp) : null, mrp ? Money(p.Mrp - shown) : null, p.OfferPrice is not null ? p.Offer?.Name?.Trim() : null,
-            Plain(p.Dimensions, "size"), p.Options.Where(o => o.IsColour).SelectMany(Values).ToList(),
+            Plain(p.Dimensions, "(size|dimensions?)"), p.Options.Where(o => o.IsColour).SelectMany(Values).ToList(),
             p.Options.Where(o => !o.IsColour).OrderBy(o => o.Position).Select(o => (o.Name, Vals: Values(o))).Where(x => x.Vals.Count > 1)
                 .Select(x => $"{x.Name}: {string.Join(", ", x.Vals)}").ToList(),
             Plain(p.Material, "material"), Plain(p.Warranty, "warranty"), p.DeliveryDays, p.AssemblyIncluded, p.IsAvailable,
