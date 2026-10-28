@@ -57,13 +57,14 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
                 var st = await StatsAsync(s, c, ct);
                 s.Views = st.Views; s.Reach = st.Reach; s.Likes = st.Likes; s.Comments = st.Comments; s.Shares = st.Shares; s.Saves = st.Saves;
                 s.StatsAt = now;
+                issues.Remove(Group(s.Platform) + ":token");
                 if (st.NeedsPermission) issues[Group(s.Platform) + ":stats"] = StatsIssue(s.Platform);
             }
             catch (MetaException ex) when (ex.Code == 100) { s.StatsAt = now; }   // deleted in the app: try again later
             catch (Exception ex) when (ex is MetaException or HttpRequestException)
             {
                 logger.LogWarning("Reading {Platform} numbers for post {Post} failed: {Message}", s.Platform, s.Id, ex.Message);
-                if (ex is MetaException { TokenInvalid: true }) break;
+                if (ex is MetaException { TokenInvalid: true }) { await TokenLostAsync(issues, s.Platform, ex.Message); break; }
             }
         }
         await db.SaveChangesAsync(ct);
@@ -76,6 +77,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
             {
                 var fresh = await StoreCommentsAsync(s, c, await FetchCommentsAsync(s, c, ct), ct);
                 s.CommentsCheckedAt = now;
+                issues.Remove(Group(s.Platform) + ":token");
                 await db.SaveChangesAsync(ct);
                 await AssistAsync(s, c, fresh, ct);
             }
@@ -84,7 +86,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
             catch (Exception ex) when (ex is MetaException or HttpRequestException)
             {
                 logger.LogWarning("Reading {Platform} comments for post {Post} failed: {Message}", s.Platform, s.Id, ex.Message);
-                if (ex is MetaException { TokenInvalid: true }) break;
+                if (ex is MetaException { TokenInvalid: true }) { await TokenLostAsync(issues, s.Platform, ex.Message); break; }
             }
         }
         c.EngagementIssues = issues.Count == 0 ? null : JsonSerializer.Serialize(issues);
@@ -481,6 +483,23 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         try { d = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? []; } catch (JsonException) { return null; }
         foreach (var k in d.Keys.Where(k => k.StartsWith(group + ":")).ToList()) d.Remove(k);
         return d.Count == 0 ? null : JsonSerializer.Serialize(d);
+    }
+
+    /// <summary>The account's access stopped working: a red note in Admin and one email (not again every run while it lasts).
+    /// The note goes when a read works again or the account is connected again.</summary>
+    private async Task TokenLostAsync(Dictionary<string, string> issues, SocialPlatform p, string why)
+    {
+        var key = Group(p) + ":token";
+        if (issues.ContainsKey(key)) return;
+        var threadsAccount = SocialService.IsThreads(p);
+        issues[key] = threadsAccount
+            ? "Disconnected: Threads no longer accepts WoodsyCart's access, so replies and numbers aren't read and Threads posts will fail. Connect Threads again in Settings."
+            : "Disconnected: Meta no longer accepts WoodsyCart's access to Instagram and Facebook, so comments and numbers aren't read and posts will fail. Connect again in Settings with a new token, keeping every permission ticked.";
+        await social.NotifyAsync(threadsAccount ? "Threads is disconnected" : "Instagram and Facebook are disconnected",
+            (threadsAccount
+                ? "<p>Threads no longer accepts WoodsyCart's access (the token expired or was removed). Replies and numbers aren't being read and Threads posts will fail.</p><p>Connect Threads again in Admin → Social media → Settings.</p>"
+                : "<p>Meta no longer accepts WoodsyCart's access to Instagram and Facebook (a permission was removed, the app's access was removed or the password changed). Comments and numbers aren't being read and posts will fail.</p><p>Connect again in Admin → Social media → Settings with a new token, keeping every permission ticked.</p>")
+            + $"<p>Meta said: {System.Net.WebUtility.HtmlEncode(why)}</p>");
     }
 
     private static string Group(SocialPlatform p) => SocialService.IsThreads(p) ? Threads : Meta;
