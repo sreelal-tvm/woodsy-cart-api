@@ -205,7 +205,8 @@ public class MetaClient(IHttpClientFactory http, IConfiguration config)
                 var s = Metrics(await GetAsync($"{mediaId}/insights?metric=views,reach,replies,shares", token, ct));
                 return new PostStats(s.Num("views"), s.Num("reach"), null, s.Num("replies"), s.Num("shares"), null, false);
             }
-            catch (MetaException ex) when (ex.IsPermission) { return new PostStats(null, null, null, null, null, null, true); }
+            // Code 10 here mostly means "not enough viewers yet", not a missing permission (posts' numbers tell that)
+            catch (MetaException ex) when (ex.IsPermission || ex.Code == 100) { return new PostStats(null, null, null, null, null, null, false); }
         }
         try
         {

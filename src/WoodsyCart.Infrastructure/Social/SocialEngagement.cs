@@ -49,6 +49,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
             .ToListAsync(ct);
         posts = posts.Where(s => SocialService.IsThreads(s.Platform) ? threadsOn : metaOn).ToList();
         var issues = Issues(c);
+        var needsPermission = new Dictionary<string, bool>();   // per account, from the numbers read this run
 
         foreach (var s in posts.Where(s => StatsDue(s, now)).OrderBy(s => s.StatsAt ?? DateTime.MinValue).Take(CallsPerRun))
         {
@@ -59,6 +60,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
                 s.StatsAt = now;
                 issues.Remove(Group(s.Platform) + ":token");
                 if (st.NeedsPermission) issues[Group(s.Platform) + ":stats"] = StatsIssue(s.Platform);
+                if (!SocialService.IsStory(s.Platform)) needsPermission[Group(s.Platform)] = needsPermission.GetValueOrDefault(Group(s.Platform)) || st.NeedsPermission;
             }
             catch (MetaException ex) when (ex.Code == 100) { s.StatsAt = now; }   // deleted in the app: try again later
             catch (Exception ex) when (ex is MetaException or HttpRequestException)
@@ -67,6 +69,8 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
                 if (ex is MetaException { TokenInvalid: true }) { await TokenLostAsync(issues, s.Platform, ex.Message); break; }
             }
         }
+        // The permission was added since: the note goes without connecting again
+        foreach (var (group, needs) in needsPermission) if (!needs) issues.Remove(group + ":stats");
         await db.SaveChangesAsync(ct);
 
         // Story replies arrive as messages, not comments
