@@ -45,6 +45,10 @@ public record SocialStats(int? Views, int? Reach, int? Likes, int? Comments, int
 {
     public static SocialStats? Of(SocialPost? s) => s?.StatsAt is null ? null : new(s.Views, s.Reach, s.Likes, s.Comments, s.Shares, s.Saves, s.StatsAt);
 }
+/// <summary>A product's details for answering questions in comments.</summary>
+public record ProductFacts(int Id, string Name, string Code, string Price, string? Mrp, string? Saving, string? Offer, string? Size,
+    List<string> Colours, List<string> Options, string? Material, string? Warranty, int DeliveryDays, bool Assembly, bool InStock,
+    string City, string Website, string Link, string? WhatsApp);
 public record SocialQuota(SocialPlatform Platform, int Used, int Limit, bool FromMeta);
 
 /// <summary>
@@ -256,6 +260,12 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     internal static bool ThreadsConnected(SocialConfig c) => c.ThreadsTokenProtected is not null && c.ThreadsUserId is not null;
     private static bool AnyConnected(SocialConfig c) => IsConnected(c) || ThreadsConnected(c);
     internal string Token(SocialConfig c) => _protector.Unprotect(c.PageTokenProtected!);
+    internal string Protect(string secret) => _protector.Protect(secret);
+    internal string? AiKey(SocialConfig c)
+    {
+        if (c.AiKeyProtected is null) return null;
+        try { return _protector.Unprotect(c.AiKeyProtected); } catch (System.Security.Cryptography.CryptographicException) { return null; }
+    }
     internal string ThreadsToken(SocialConfig c) => _protector.Unprotect(c.ThreadsTokenProtected!);
 
     private static List<SocialPlatform> Enabled(SocialConfig c)
@@ -342,6 +352,35 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     }
 
     public string FullPath(string rel) => storage.FullPath(rel);
+
+    /// <summary>What the reply assistant may say about a product: only these details, never anything else.</summary>
+    internal async Task<ProductFacts?> FactsAsync(int productId)
+    {
+        var p = await WithDetails().FirstOrDefaultAsync(x => x.Id == productId);
+        if (p is null) return null;
+        var c = await ConfigAsync();
+        var biz = await db.BusinessSettings.AsNoTracking().FirstAsync();
+        var inr = System.Globalization.CultureInfo.GetCultureInfo("en-IN");
+        string Money(decimal v) => "₹" + v.ToString("#,##0", inr);
+        var variants = p.Variants.Where(v => v.IsActive && v.IsAvailable).ToList();
+        var price = p.OfferPrice ?? p.SellingPrice;
+        var range = variants.Count > 1 && variants.Select(v => v.OfferPrice ?? v.SellingPrice).Distinct().Count() > 1;
+        var shown = range ? Math.Min(variants.Min(v => v.OfferPrice ?? v.SellingPrice), price) : price;
+        var mrp = !range && p.Mrp > shown;
+        List<string> Values(ProductOption o) => o.Values.Where(v => !v.IsHidden).OrderBy(v => v.SortOrder).Select(v => v.Value.Trim())
+            .Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        string? Plain(string? v, string label) => string.IsNullOrWhiteSpace(v) ? null
+            : System.Text.RegularExpressions.Regex.Replace(v.Trim(), @"^\s*" + label + @"\s*[:\-]+\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var reel = SocialCaption.Reel(p, c, biz);
+        var store = (email.StorefrontUrl ?? "https://woodsycart.com").TrimEnd('/');
+        return new ProductFacts(p.Id, p.Name.Trim(), SocialCaption.Code(p.Id), (range ? "from " : "") + Money(shown),
+            mrp ? Money(p.Mrp) : null, mrp ? Money(p.Mrp - shown) : null, p.OfferPrice is not null ? p.Offer?.Name?.Trim() : null,
+            Plain(p.Dimensions, "size"), p.Options.Where(o => o.IsColour).SelectMany(Values).ToList(),
+            p.Options.Where(o => !o.IsColour).OrderBy(o => o.Position).Select(o => (o.Name, Vals: Values(o))).Where(x => x.Vals.Count > 1)
+                .Select(x => $"{x.Name}: {string.Join(", ", x.Vals)}").ToList(),
+            Plain(p.Material, "material"), Plain(p.Warranty, "warranty"), p.DeliveryDays, p.AssemblyIncluded, p.IsAvailable,
+            c.City ?? biz.City ?? "Bengaluru", reel.Website, $"{store}/product/{p.Slug}", reel.WhatsApp);
+    }
 
     // ---------- Reel music (royalty-free tracks uploaded in Admin) ----------
 

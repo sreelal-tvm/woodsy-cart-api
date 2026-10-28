@@ -50,6 +50,14 @@ public class SocialConfig : BaseEntity
     public string? EngagementIssues { get; set; }
     public DateTime? CommentsEmailedAt { get; set; }      // last "new comments" email (at most one every 30 minutes)
 
+    // Reply assistant: answers price / size / colour … questions from the product's details (keyword rules, then Claude for
+    // the rest when switched on). Suggest = drafts in Admin; Auto = sent, at most AutoRepliesPerHour
+    public AutoReplyMode AutoReplyMode { get; set; } = AutoReplyMode.Suggest;
+    public bool AutoReplyAi { get; set; }
+    public string? AiKeyProtected { get; set; }            // Anthropic API key, encrypted
+    public string AiModel { get; set; } = "claude-opus-5-5";
+    public int AutoRepliesPerHour { get; set; } = 20;
+
     // Caption
     public string? Template { get; set; }                 // null = built-in template
     public bool IncludePrice { get; set; } = true;
@@ -111,4 +119,12 @@ public class SocialComment : BaseEntity
     public bool FromUs { get; set; }                       // our own reply (from Admin or the app)
     public DateTime? ReadAt { get; set; }                  // top comments only: null = new activity to look at
     public DateTime LastActivityAt { get; set; }           // top comments only: newest comment in the conversation
+
+    // Reply assistant (top comments only): the drafted answer to the newest question in the conversation
+    public AutoReplyState ReplyState { get; set; }
+    public string? SuggestedReply { get; set; }
+    public string? SuggestedTopic { get; set; }            // e.g. "Price, Size"
+    public string? SuggestedSource { get; set; }           // "Rules" or "AI"
+    public bool SuggestedComplete { get; set; }            // every question answered from real details (may be sent automatically)
+    public bool Auto { get; set; }                         // our reply, sent by the assistant
 }

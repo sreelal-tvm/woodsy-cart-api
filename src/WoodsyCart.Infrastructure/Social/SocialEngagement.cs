@@ -11,9 +11,14 @@ using WoodsyCart.Infrastructure.Services;
 
 namespace WoodsyCart.Infrastructure.Social;
 
-public record SocialReplyDto(int Id, string Author, string Text, DateTime PostedAt, bool FromUs);
+public record SocialReplyDto(int Id, string Author, string Text, DateTime PostedAt, bool FromUs, bool Auto = false);
 public record SocialCommentDto(int Id, int PostId, int ProductId, string ProductName, string? Image, SocialPlatform Platform, string? Permalink,
-    string Author, string Text, DateTime PostedAt, bool Unread, List<SocialReplyDto> Replies, bool FromUs = false);
+    string Author, string Text, DateTime PostedAt, bool Unread, List<SocialReplyDto> Replies, bool FromUs = false,
+    AutoReplyState ReplyState = AutoReplyState.None, string? SuggestedReply = null, string? SuggestedTopic = null, string? SuggestedSource = null,
+    bool SuggestedComplete = false);
+public record AutoReplySettingsDto(AutoReplyMode Mode, bool Ai, bool HasAiKey, string AiModel, int PerHour, string[] Models);
+public record AutoReplySettingsUpdate(AutoReplyMode Mode, bool Ai, string? AiKey, bool ClearAiKey, string AiModel, int PerHour);
+public record AutoReplyTest(int ProductId, string Text, SocialPlatform Platform = SocialPlatform.Instagram, string? Author = null);
 public record SocialReplyRequest(string Text);
 public record SocialPlatformTotals(SocialPlatform Platform, int Posts, int? Views, int? Reach, int Likes, int Comments, int? Shares, int? Saves);
 public record SocialTopPost(int Id, int ProductId, string ProductName, string? Image, SocialPlatform Platform, string? Permalink, DateTime? PublishedAt, SocialStats Stats);
@@ -25,7 +30,8 @@ public record SocialPerformance(int Days, List<SocialPlatformTotals> Platforms, 
 /// New comments show in Admin → Social media → Comments and are emailed to the admins (at most every 30 minutes);
 /// replies are sent from Admin as the account.
 /// </summary>
-public class SocialEngagement(AppDbContext db, SocialService social, MetaClient meta, ThreadsClient threads, EmailSender email, ILogger<SocialEngagement> logger)
+public class SocialEngagement(AppDbContext db, SocialService social, MetaClient meta, ThreadsClient threads, CommentAssistant assistant,
+    EmailSender email, ILogger<SocialEngagement> logger)
 {
     private const int MaxAgeDays = 90, CallsPerRun = 30;
     private const string Meta = "Meta", Threads = "Threads";
@@ -68,9 +74,10 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         {
             try
             {
-                await StoreCommentsAsync(s, c, await FetchCommentsAsync(s, c, ct), ct);
+                var fresh = await StoreCommentsAsync(s, c, await FetchCommentsAsync(s, c, ct), ct);
                 s.CommentsCheckedAt = now;
                 await db.SaveChangesAsync(ct);
+                await AssistAsync(s, c, fresh, ct);
             }
             catch (MetaException ex) when (ex.IsPermission) { issues[Group(s.Platform) + ":comments"] = CommentsIssue(s.Platform); }
             catch (MetaException ex) when (ex.Code == 100) { s.CommentsCheckedAt = now; await db.SaveChangesAsync(ct); }
@@ -82,6 +89,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         }
         c.EngagementIssues = issues.Count == 0 ? null : JsonSerializer.Serialize(issues);
         await db.SaveChangesAsync(ct);
+        await AutoSendAsync(c, ct);
         await EmailNewCommentsAsync(c, ct);
     }
 
@@ -121,9 +129,11 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
 
     /// <summary>Adds comments we haven't seen. A new comment from someone else marks its conversation unread. On a post's first
     /// check, comments older than 3 days count as already read (no flood of old comments).</summary>
-    private async Task StoreCommentsAsync(SocialPost s, SocialConfig c, List<FetchedComment> fetched, CancellationToken ct)
+    /// <returns>The new comments from other people (not old ones from a first check), for the reply assistant.</returns>
+    private async Task<List<SocialComment>> StoreCommentsAsync(SocialPost s, SocialConfig c, List<FetchedComment> fetched, CancellationToken ct)
     {
-        if (fetched.Count == 0) return;
+        var fresh = new List<SocialComment>();
+        if (fetched.Count == 0) return fresh;
         var known = await db.SocialComments.Where(x => x.SocialPostId == s.Id).ToListAsync(ct);
         var byId = known.ToDictionary(x => x.ExternalId);
         var parentOf = fetched.ToDictionary(f => f.Id, f => f.ParentId);
@@ -152,6 +162,79 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
             }
             db.SocialComments.Add(x);
             byId[f.Id] = x;
+            if (!mine && !(first && f.At < now.AddDays(-3))) fresh.Add(x);
+        }
+        return fresh;
+    }
+
+    // ---------- Reply assistant ----------
+
+    /// <summary>Drafts an answer for each conversation that got a new question (Settings → Automatic replies).</summary>
+    private async Task AssistAsync(SocialPost post, SocialConfig c, List<SocialComment> fresh, CancellationToken ct)
+    {
+        if (c.AutoReplyMode == AutoReplyMode.Off || fresh.Count == 0) return;
+        var facts = await social.FactsAsync(post.ProductId);
+        if (facts is null) return;
+        foreach (var g in fresh.GroupBy(x => x.Parent ?? x))
+        {
+            var top = g.Key;
+            var latest = g.OrderBy(x => x.PostedAt).Last();
+            var earlier = await db.SocialComments.AsNoTracking().Where(x => x.Id == top.Id || x.ParentId == top.Id)
+                .OrderBy(x => x.PostedAt).Select(x => (x.FromUs ? "WoodsyCart" : x.Author) + ": " + x.Text).ToListAsync(ct);
+            var s = await SuggestAsync(c, facts, latest.Author, latest.Text, earlier.Where(e => !e.EndsWith(": " + latest.Text)).ToList(),
+                post.Platform, Math.Abs(latest.ExternalId.GetHashCode()), ct);
+            Apply(top, s);
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Rules first; Claude for what they can't place (when switched on). Unhappy comments always go to a person.</summary>
+    private async Task<(CommentSuggestion? S, bool Unhappy)> SuggestAsync(SocialConfig c, ProductFacts facts, string author, string text,
+        List<string> earlier, SocialPlatform platform, int seed, CancellationToken ct)
+    {
+        var (topics, unhappy) = CommentAssistant.Read(text);
+        if (unhappy) return (null, true);
+        if (topics.Count > 0) return (CommentAssistant.FromRules(topics, facts, author, platform, seed), false);
+        if (c.AutoReplyAi && social.AiKey(c) is { } key)
+            return (await assistant.FromAiAsync(key, c.AiModel, facts, author, text, earlier, platform, ct), false);
+        return (null, false);
+    }
+
+    private static void Apply(SocialComment top, (CommentSuggestion? S, bool Unhappy) r)
+    {
+        var s = r.S;
+        top.SuggestedReply = s?.Reply;
+        top.SuggestedTopic = s?.Topic is { Length: > 0 } t ? Cut(t, 100) : r.Unhappy ? "Unhappy?" : null;
+        top.SuggestedSource = s?.Source;
+        top.SuggestedComplete = s?.Complete ?? false;
+        top.ReplyState = s?.Reply is not null ? AutoReplyState.Drafted : r.Unhappy ? AutoReplyState.NeedsYou : AutoReplyState.None;
+    }
+
+    /// <summary>Automatic mode: sends complete drafts, a few per run and at most AutoRepliesPerHour, never twice to the same
+    /// person on the same post (a second question waits as a draft).</summary>
+    private async Task AutoSendAsync(SocialConfig c, CancellationToken ct)
+    {
+        if (c.AutoReplyMode != AutoReplyMode.Auto) return;
+        var hourAgo = DateTime.UtcNow.AddHours(-1);
+        var room = Math.Min(c.AutoRepliesPerHour - await db.SocialComments.CountAsync(x => x.Auto && x.PostedAt > hourAgo, ct), 3);
+        if (room <= 0) return;
+        var drafts = await db.SocialComments.Where(x => x.ParentId == null && x.ReplyState == AutoReplyState.Drafted && x.SuggestedComplete && x.SuggestedReply != null)
+            .OrderBy(x => x.LastActivityAt).Take(20).ToListAsync(ct);
+        var sent = 0;
+        foreach (var d in drafts)
+        {
+            if (sent >= room || ct.IsCancellationRequested) break;
+            var already = await db.SocialComments.AnyAsync(x => x.Auto && x.SocialPostId == d.SocialPostId
+                && (x.ParentId == d.Id || x.Parent!.Author == d.Author), ct);
+            if (already) continue;
+            if (sent > 0) await Task.Delay(TimeSpan.FromSeconds(20), ct);   // not a burst of identical-looking replies
+            try { await SendAsync(d, d.SuggestedReply!, auto: true); sent++; }
+            catch (AppException ex)
+            {
+                logger.LogWarning("Automatic reply to comment {Comment} failed: {Message}", d.Id, ex.Message);
+                d.ReplyState = AutoReplyState.NeedsYou; d.SuggestedComplete = false;
+                await db.SaveChangesAsync(ct);
+            }
         }
     }
 
@@ -169,6 +252,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         if (c.CommentsEmailedAt > now.AddMinutes(-30)) return;
         var since = c.CommentsEmailedAt ?? now.AddHours(-1);
         var fresh = await db.SocialComments.AsNoTracking()
+            // Conversations the assistant already answered are left out
             .Where(x => !x.FromUs && x.CreatedAt > since && (x.Parent == null ? x.ReadAt == null : x.Parent.ReadAt == null))
             .OrderBy(x => x.PostedAt).Select(x => new { x.Platform, x.Author, x.Text, Product = x.Post!.Product!.Name }).ToListAsync(ct);
         if (fresh.Count == 0) return;
@@ -187,11 +271,12 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     public Task<int> UnreadAsync() => db.SocialComments.CountAsync(x => x.ParentId == null && x.ReadAt == null);
 
     /// <summary>Conversations, newest activity first. <paramref name="account"/>: instagram, facebook or threads (reels included).</summary>
-    public async Task<PagedResult<SocialCommentDto>> ListAsync(bool unreadOnly, string? account, int page, int pageSize, bool own = false)
+    public async Task<PagedResult<SocialCommentDto>> ListAsync(bool unreadOnly, string? account, int page, int pageSize, bool own = false, bool drafts = false)
     {
         // Comments the account wrote itself only when asked for (they are never "new")
         var q = db.SocialComments.AsNoTracking().Where(x => x.ParentId == null && (own || !x.FromUs));
         if (unreadOnly) q = q.Where(x => x.ReadAt == null && !x.FromUs);
+        if (drafts) q = q.Where(x => x.ReplyState == AutoReplyState.Drafted || x.ReplyState == AutoReplyState.NeedsYou);
         SocialPlatform[]? kinds = account?.ToLowerInvariant() switch
         {
             "instagram" => [SocialPlatform.Instagram, SocialPlatform.InstagramReel],
@@ -215,7 +300,8 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         {
             Items = tops.Select(t => new SocialCommentDto(t.C.Id, t.C.SocialPostId, t.ProductId, t.Name, t.Image, t.C.Platform, t.Permalink,
                 t.C.Author, t.C.Text, t.C.PostedAt, t.C.ReadAt is null,
-                replies.Where(r => r.ParentId == t.C.Id).Select(r => new SocialReplyDto(r.Id, r.Author, r.Text, r.PostedAt, r.FromUs)).ToList(), t.C.FromUs)).ToList(),
+                replies.Where(r => r.ParentId == t.C.Id).Select(r => new SocialReplyDto(r.Id, r.Author, r.Text, r.PostedAt, r.FromUs, r.Auto)).ToList(), t.C.FromUs,
+                t.C.ReplyState, t.C.SuggestedReply, t.C.SuggestedTopic, t.C.SuggestedSource, t.C.SuggestedComplete)).ToList(),
             Total = total, Page = page, PageSize = pageSize
         };
     }
@@ -233,9 +319,14 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     /// <summary>Replies under the conversation as the account, and marks it read.</summary>
     public async Task<SocialReplyDto> ReplyAsync(int id, string text)
     {
+        var top = await db.SocialComments.Include(x => x.Post).FirstOrDefaultAsync(x => x.Id == id && x.ParentId == null) ?? throw new AppException("Comment not found", 404);
+        return await SendAsync(top, text, auto: false);
+    }
+
+    private async Task<SocialReplyDto> SendAsync(SocialComment top, string text, bool auto)
+    {
         text = text?.Trim() ?? "";
         if (text.Length == 0) throw new AppException("Write a reply first.");
-        var top = await db.SocialComments.Include(x => x.Post).FirstOrDefaultAsync(x => x.Id == id && x.ParentId == null) ?? throw new AppException("Comment not found", 404);
         if (SocialService.IsThreads(top.Platform) && System.Text.Encoding.UTF8.GetByteCount(text) > SocialCaption.ThreadsMaxLength)
             throw new AppException($"Threads allows {SocialCaption.ThreadsMaxLength} characters. Shorten the reply.");
         if (text.Length > 2200) throw new AppException("Replies can be at most 2,200 characters.");
@@ -264,12 +355,77 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         var reply = new SocialComment
         {
             SocialPostId = top.SocialPostId, Platform = top.Platform, ExternalId = newId, ParentId = top.Id,
-            Author = Cut(OurName(top.Platform, c), 100), Text = Cut(text, 2200), PostedAt = now, FromUs = true, LastActivityAt = now
+            Author = Cut(OurName(top.Platform, c), 100), Text = Cut(text, 2200), PostedAt = now, FromUs = true, LastActivityAt = now, Auto = auto
         };
         db.SocialComments.Add(reply);
         top.ReadAt = now; top.LastActivityAt = now;
+        if (top.ReplyState is AutoReplyState.Drafted or AutoReplyState.NeedsYou) top.ReplyState = AutoReplyState.Sent;
+        top.SuggestedReply = null; top.SuggestedComplete = false;
         await db.SaveChangesAsync();
-        return new SocialReplyDto(reply.Id, reply.Author, reply.Text, reply.PostedAt, true);
+        return new SocialReplyDto(reply.Id, reply.Author, reply.Text, reply.PostedAt, true, auto);
+    }
+
+    /// <summary>Drops the drafted answer (it stays answerable by hand).</summary>
+    public async Task DismissAsync(int id)
+    {
+        var top = await db.SocialComments.FirstOrDefaultAsync(x => x.Id == id && x.ParentId == null) ?? throw new AppException("Comment not found", 404);
+        top.ReplyState = AutoReplyState.Dismissed; top.SuggestedReply = null; top.SuggestedComplete = false;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Drafts the answer again (e.g. after the product's details changed), for the newest question in the conversation.</summary>
+    public async Task<SocialCommentDto?> RedraftAsync(int id)
+    {
+        var top = await db.SocialComments.Include(x => x.Post).FirstOrDefaultAsync(x => x.Id == id && x.ParentId == null) ?? throw new AppException("Comment not found", 404);
+        var all = await db.SocialComments.AsNoTracking().Where(x => x.Id == top.Id || x.ParentId == top.Id).OrderBy(x => x.PostedAt).ToListAsync();
+        var latest = all.LastOrDefault(x => !x.FromUs) ?? throw new AppException("There is no question from someone else in this conversation.");
+        var facts = await social.FactsAsync(top.Post!.ProductId) ?? throw new AppException("The product no longer exists.");
+        var c = await social.ConfigAsync();
+        Apply(top, await SuggestAsync(c, facts, latest.Author, latest.Text,
+            all.Where(x => x.Id != latest.Id).Select(x => (x.FromUs ? "WoodsyCart" : x.Author) + ": " + x.Text).ToList(),
+            top.Platform, Environment.TickCount & int.MaxValue, CancellationToken.None));
+        await db.SaveChangesAsync();
+        return null;
+    }
+
+    // ---------- Reply assistant settings ----------
+
+    public static readonly string[] AiModels = ["claude-opus-5-5", "claude-haiku-5-5"];
+
+    public async Task<AutoReplySettingsDto> AutoReplySettingsAsync()
+    {
+        var c = await social.ConfigAsync();
+        return new AutoReplySettingsDto(c.AutoReplyMode, c.AutoReplyAi, c.AiKeyProtected is not null, c.AiModel, c.AutoRepliesPerHour, AiModels);
+    }
+
+    public async Task<AutoReplySettingsDto> SaveAutoReplySettingsAsync(AutoReplySettingsUpdate r)
+    {
+        if (!AiModels.Contains(r.AiModel)) throw new AppException("Choose one of the listed Claude models.");
+        if (r.PerHour is < 1 or > 60) throw new AppException("Automatic replies per hour must be between 1 and 60.");
+        var c = await social.ConfigAsync();
+        if (r.ClearAiKey) c.AiKeyProtected = null;
+        if (!string.IsNullOrWhiteSpace(r.AiKey))
+        {
+            var key = r.AiKey.Trim();
+            if (!key.StartsWith("sk-ant-", StringComparison.Ordinal)) throw new AppException("That doesn't look like a Claude API key (it starts with sk-ant-).");
+            c.AiKeyProtected = social.Protect(key);
+        }
+        if (r.Ai && c.AiKeyProtected is null) throw new AppException("Add a Claude API key to use Claude for unclear comments.");
+        c.AutoReplyMode = r.Mode; c.AutoReplyAi = r.Ai; c.AiModel = r.AiModel; c.AutoRepliesPerHour = r.PerHour;
+        await db.SaveChangesAsync();
+        return await AutoReplySettingsAsync();
+    }
+
+    /// <summary>Try a comment against a product without posting anything.</summary>
+    public async Task<CommentSuggestion> TestAsync(AutoReplyTest t)
+    {
+        if (string.IsNullOrWhiteSpace(t.Text)) throw new AppException("Type a comment to try.");
+        var facts = await social.FactsAsync(t.ProductId) ?? throw new AppException("No product with that number (WC code without the letters).");
+        var c = await social.ConfigAsync();
+        var (s, unhappy) = await SuggestAsync(c, facts, string.IsNullOrWhiteSpace(t.Author) ? "customer" : t.Author.Trim().TrimStart('@'), t.Text.Trim(), [],
+            t.Platform, Environment.TickCount & int.MaxValue, CancellationToken.None);
+        return s ?? new CommentSuggestion(null, unhappy ? "Unhappy?" : "", "Rules", false,
+            unhappy ? "Sounds unhappy: a person should answer." : c.AutoReplyAi ? "Claude couldn't answer it from the product's details." : "The rules don't recognise it (switch on Claude for these).");
     }
 
     /// <summary>Totals per platform for posts published in the last <paramref name="days"/> days, and the best posts.</summary>

@@ -71,6 +71,12 @@ public enum BackgroundStatus
 public enum SocialPlatform { Instagram = 0, Facebook = 1, Threads = 2, InstagramReel = 3, FacebookReel = 4, ThreadsVideo = 5,
     InstagramStory = 6, FacebookStory = 7 }
 
+/// <summary>Answers to product questions in comments: off, drafted for Admin to send, or sent automatically.</summary>
+public enum AutoReplyMode { Off = 0, Suggest = 1, Auto = 2 }
+
+/// <summary>Where a comment conversation stands with the reply assistant.</summary>
+public enum AutoReplyState { None = 0, Drafted = 1, Sent = 2, Dismissed = 3, NeedsYou = 4 }
+
 public enum SocialPostStatus
 {
     Queued = 0,         // waiting for its time (ScheduledAt)

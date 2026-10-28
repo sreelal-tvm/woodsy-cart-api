@@ -2398,6 +2398,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<bool>("Auto")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
@@ -2424,8 +2427,26 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<DateTime?>("ReadAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<int>("ReplyState")
+                        .HasColumnType("int");
+
                     b.Property<int>("SocialPostId")
                         .HasColumnType("int");
+
+                    b.Property<bool>("SuggestedComplete")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("SuggestedReply")
+                        .HasMaxLength(2200)
+                        .HasColumnType("nvarchar(2200)");
+
+                    b.Property<string>("SuggestedSource")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("SuggestedTopic")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("Text")
                         .IsRequired()
@@ -2455,11 +2476,29 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("AiKeyProtected")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("AiModel")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
                     b.Property<bool>("AutoQueueNewProducts")
                         .HasColumnType("bit");
 
                     b.Property<DateTime?>("AutoQueueSince")
                         .HasColumnType("datetime2");
+
+                    b.Property<int>("AutoRepliesPerHour")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("AutoReplyAi")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("AutoReplyMode")
+                        .HasColumnType("int");
 
                     b.Property<string>("City")
                         .HasMaxLength(500)

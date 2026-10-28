@@ -40,8 +40,8 @@ public class AdminSocialController(SocialService social, CatalogFeed feed, Socia
 
     /// <summary>Comment conversations on our posts (unread = new comments since you last looked).</summary>
     [HttpGet("comments")]
-    public Task<PagedResult<SocialCommentDto>> Comments(bool unread = false, string? account = null, int page = 1, int pageSize = 20, bool own = false) =>
-        engagement.ListAsync(unread, account, page, pageSize, own);
+    public Task<PagedResult<SocialCommentDto>> Comments(bool unread = false, string? account = null, int page = 1, int pageSize = 20, bool own = false, bool drafts = false) =>
+        engagement.ListAsync(unread, account, page, pageSize, own, drafts);
 
     [HttpGet("comments/unread")]
     public async Task<object> UnreadComments() => new { count = await engagement.UnreadAsync() };
@@ -54,6 +54,24 @@ public class AdminSocialController(SocialService social, CatalogFeed feed, Socia
 
     [HttpPost("comments/{id:int}/read")]
     public async Task<IActionResult> MarkRead(int id, bool read = true) { await engagement.MarkReadAsync(id, read); return NoContent(); }
+
+    /// <summary>Drop the drafted answer of a conversation.</summary>
+    [HttpPost("comments/{id:int}/dismiss")]
+    public async Task<IActionResult> Dismiss(int id) { await engagement.DismissAsync(id); return NoContent(); }
+
+    /// <summary>Draft the answer again (e.g. after changing the product's details).</summary>
+    [HttpPost("comments/{id:int}/redraft")]
+    public async Task<IActionResult> Redraft(int id) { await engagement.RedraftAsync(id); return NoContent(); }
+
+    [HttpGet("auto-reply")]
+    public Task<AutoReplySettingsDto> AutoReply() => engagement.AutoReplySettingsAsync();
+
+    [HttpPut("auto-reply")]
+    public Task<AutoReplySettingsDto> SaveAutoReply(AutoReplySettingsUpdate r) => engagement.SaveAutoReplySettingsAsync(r);
+
+    /// <summary>What the assistant would answer to a comment on a product (nothing is posted).</summary>
+    [HttpPost("auto-reply/test")]
+    public Task<CommentSuggestion> TestAutoReply(AutoReplyTest t) => engagement.TestAsync(t);
 
     [HttpPost("comments/read-all")]
     public async Task<object> MarkAllRead() => new { count = await engagement.MarkAllReadAsync() };

@@ -84,6 +84,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.StoryTimes).HasMaxLength(200);
             e.Property(x => x.FeedFetchedBy).HasMaxLength(200);
             e.Property(x => x.EngagementIssues).HasMaxLength(2000);
+            e.Property(x => x.AiKeyProtected).HasMaxLength(2000);
+            e.Property(x => x.AiModel).HasMaxLength(60);
         });
         b.Entity<SocialPost>(e =>
         {
@@ -105,6 +107,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.ExternalId).HasMaxLength(100);
             e.Property(x => x.Author).HasMaxLength(100);
             e.Property(x => x.Text).HasMaxLength(2200);
+            e.Property(x => x.SuggestedReply).HasMaxLength(2200);
+            e.Property(x => x.SuggestedTopic).HasMaxLength(100);
+            e.Property(x => x.SuggestedSource).HasMaxLength(20);
             e.HasOne(x => x.Post).WithMany().HasForeignKey(x => x.SocialPostId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Parent).WithMany().HasForeignKey(x => x.ParentId).OnDelete(DeleteBehavior.NoAction);
         });
