@@ -11,6 +11,7 @@ namespace WoodsyCart.Infrastructure.Social;
 /// <summary>A drafted answer. Complete = every question was answered from real product details (may be sent automatically);
 /// Reply null = leave it to a person (complaint, unclear, off-topic).</summary>
 public record CommentSuggestion(string? Reply, string Topic, string Source, bool Complete, string? Why = null);
+public record AiModel(string Id, string Name);
 
 /// <summary>
 /// Drafts answers to product questions in comments ("price?", "size?", "colours?", "kitne ka hai") from the product's own
@@ -19,6 +20,43 @@ public record CommentSuggestion(string? Reply, string Topic, string Source, bool
 /// </summary>
 public partial class CommentAssistant(ILogger<CommentAssistant> logger)
 {
+    /// <summary>Shown until a key is saved (then the key's own list from Anthropic is used).</summary>
+    public static readonly AiModel[] KnownModels =
+    [
+        new("claude-opus-5-5", "Claude Opus 5.5"), new("claude-sonnet-5-5", "Claude Sonnet 5.5"), new("claude-haiku-5-5", "Claude Haiku 5.5"),
+        new("claude-fable-5-1", "Claude Fable 5.1"), new("claude-opus-5", "Claude Opus 5"), new("claude-sonnet-5", "Claude Sonnet 5"),
+        new("claude-opus-4-8", "Claude Opus 4.8"), new("claude-haiku-4-5", "Claude Haiku 4.5")
+    ];
+
+    private List<AiModel>? _models;
+    private DateTime _modelsAt;
+
+    /// <summary>Every model the API key can use, newest first (asked from Anthropic, kept for an hour).</summary>
+    public async Task<List<AiModel>> ModelsAsync(string? apiKey, CancellationToken ct = default)
+    {
+        if (apiKey is null) return [.. KnownModels];
+        if (_models is not null && DateTime.UtcNow - _modelsAt < TimeSpan.FromHours(1)) return _models;
+        try
+        {
+            var client = new AnthropicClient { ApiKey = apiKey };
+            var page = await client.Models.List(cancellationToken: ct);
+            var list = page.Items.Select(m => new AiModel(m.ID, string.IsNullOrWhiteSpace(m.DisplayName) ? m.ID : m.DisplayName)).ToList();
+            if (list.Count == 0) return [.. KnownModels];
+            (_models, _modelsAt) = (list, DateTime.UtcNow);
+            return list;
+        }
+        catch (Exception ex) when (ex is AnthropicApiException or HttpRequestException)
+        {
+            logger.LogWarning("Could not list the Claude models: {Message}", ex.Message);
+            return [.. KnownModels];
+        }
+    }
+
+    public void ForgetModels() => _models = null;
+
+    /// <summary>Older models reject the effort setting.</summary>
+    private static bool TakesEffort(string model) => !Regex.IsMatch(model, @"claude-3|haiku-4|sonnet-4-5|sonnet-4-0|sonnet-4-1|opus-4-0|opus-4-1|opus-4-5|(opus|sonnet)-4$");
+
     public enum Topic { Price, Size, Colour, Material, Delivery, Payment, Assembly, Warranty, Stock, Order }
 
     // ---------- Rules ----------
@@ -164,7 +202,7 @@ public partial class CommentAssistant(ILogger<CommentAssistant> logger)
                 System = System,
                 OutputConfig = new OutputConfig
                 {
-                    Effort = Effort.Low,
+                    Effort = TakesEffort(model) ? Effort.Low : null,
                     Format = new JsonOutputFormat
                     {
                         Schema = new Dictionary<string, JsonElement>

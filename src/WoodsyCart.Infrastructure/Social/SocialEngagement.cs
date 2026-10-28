@@ -16,7 +16,7 @@ public record SocialCommentDto(int Id, int PostId, int ProductId, string Product
     string Author, string Text, DateTime PostedAt, bool Unread, List<SocialReplyDto> Replies, bool FromUs = false,
     AutoReplyState ReplyState = AutoReplyState.None, string? SuggestedReply = null, string? SuggestedTopic = null, string? SuggestedSource = null,
     bool SuggestedComplete = false);
-public record AutoReplySettingsDto(AutoReplyMode Mode, bool Ai, bool HasAiKey, string AiModel, int PerHour, string[] Models);
+public record AutoReplySettingsDto(AutoReplyMode Mode, bool Ai, bool HasAiKey, string AiModel, int PerHour, List<AiModel> Models);
 public record AutoReplySettingsUpdate(AutoReplyMode Mode, bool Ai, string? AiKey, bool ClearAiKey, string AiModel, int PerHour);
 public record AutoReplyTest(int ProductId, string Text, SocialPlatform Platform = SocialPlatform.Instagram, string? Author = null);
 public record SocialReplyRequest(string Text);
@@ -390,17 +390,18 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
 
     // ---------- Reply assistant settings ----------
 
-    public static readonly string[] AiModels = ["claude-opus-5-5", "claude-haiku-5-5"];
-
     public async Task<AutoReplySettingsDto> AutoReplySettingsAsync()
     {
         var c = await social.ConfigAsync();
-        return new AutoReplySettingsDto(c.AutoReplyMode, c.AutoReplyAi, c.AiKeyProtected is not null, c.AiModel, c.AutoRepliesPerHour, AiModels);
+        var models = await assistant.ModelsAsync(social.AiKey(c));
+        if (!models.Any(m => m.Id == c.AiModel)) models.Insert(0, new AiModel(c.AiModel, c.AiModel));
+        return new AutoReplySettingsDto(c.AutoReplyMode, c.AutoReplyAi, c.AiKeyProtected is not null, c.AiModel, c.AutoRepliesPerHour, models);
     }
 
     public async Task<AutoReplySettingsDto> SaveAutoReplySettingsAsync(AutoReplySettingsUpdate r)
     {
-        if (!AiModels.Contains(r.AiModel)) throw new AppException("Choose one of the listed Claude models.");
+        if (string.IsNullOrWhiteSpace(r.AiModel) || !r.AiModel.StartsWith("claude-", StringComparison.Ordinal) || r.AiModel.Length > 60)
+            throw new AppException("Choose one of the listed Claude models.");
         if (r.PerHour is < 1 or > 60) throw new AppException("Automatic replies per hour must be between 1 and 60.");
         var c = await social.ConfigAsync();
         if (r.ClearAiKey) c.AiKeyProtected = null;
@@ -409,6 +410,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
             var key = r.AiKey.Trim();
             if (!key.StartsWith("sk-ant-", StringComparison.Ordinal)) throw new AppException("That doesn't look like a Claude API key (it starts with sk-ant-).");
             c.AiKeyProtected = social.Protect(key);
+            assistant.ForgetModels();   // list the new key's models
         }
         if (r.Ai && c.AiKeyProtected is null) throw new AppException("Add a Claude API key to use Claude for unclear comments.");
         c.AutoReplyMode = r.Mode; c.AutoReplyAi = r.Ai; c.AiModel = r.AiModel; c.AutoRepliesPerHour = r.PerHour;
