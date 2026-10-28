@@ -33,7 +33,35 @@ public record SocialPerformance(int Days, List<SocialPlatformTotals> Platforms, 
 public class SocialEngagement(AppDbContext db, SocialService social, MetaClient meta, ThreadsClient threads, CommentAssistant assistant,
     EmailSender email, ILogger<SocialEngagement> logger)
 {
-    private const int MaxAgeDays = 90, CallsPerRun = 30;
+    private const int MaxAgeDays = 90, CallsPerHour = 60;
+
+    /// <summary>When the background reads called Meta and Threads in the last hour (per API process): reading stays well
+    /// under the platforms' limits and never looks like a burst.</summary>
+    private static readonly Queue<DateTime> Calls = new();
+    private static readonly Lock CallsLock = new();
+
+    private static int CallsLeft(DateTime now)
+    {
+        lock (CallsLock)
+        {
+            while (Calls.Count > 0 && Calls.Peek() < now.AddHours(-1)) Calls.Dequeue();
+            return CallsPerHour - Calls.Count;
+        }
+    }
+
+    private static void Spend(DateTime now, int calls)
+    {
+        lock (CallsLock) for (var i = 0; i < calls; i++) Calls.Enqueue(now);
+    }
+
+    /// <summary>Calls one read makes: Facebook numbers need the post plus its insights (two for a reel).</summary>
+    private static int Cost(SocialPlatform p, bool stats) => !stats ? 1 : p switch
+    {
+        SocialPlatform.Facebook => 2,
+        SocialPlatform.FacebookReel => 3,
+        SocialPlatform.FacebookStory => 0,
+        _ => 1
+    };
     private const string Meta = "Meta", Threads = "Threads";
 
     // ---------- Background work (SocialWorker, every 10 minutes) ----------
@@ -51,8 +79,14 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         var issues = Issues(c);
         var needsPermission = new Dictionary<string, bool>();   // per account, from the numbers read this run
 
-        foreach (var s in posts.Where(s => StatsDue(s, now)).OrderBy(s => s.StatsAt ?? DateTime.MinValue).Take(CallsPerRun))
+        // Comments matter more than numbers: numbers get at most half of what is left this hour
+        var statsBudget = CallsLeft(now) / 2;
+        foreach (var s in posts.Where(s => StatsDue(s, now)).OrderBy(s => s.StatsAt ?? DateTime.MinValue))
         {
+            var cost = Cost(s.Platform, stats: true);
+            if (cost > statsBudget) break;
+            statsBudget -= cost;
+            Spend(now, cost);
             try
             {
                 var st = await StatsAsync(s, c, ct);
@@ -75,8 +109,10 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
 
         // Story replies arrive as messages, not comments
         foreach (var s in posts.Where(s => !SocialService.IsStory(s.Platform) && CommentsDue(s, now) && !issues.ContainsKey(Group(s.Platform) + ":comments"))
-                     .OrderBy(s => s.CommentsCheckedAt ?? DateTime.MinValue).Take(CallsPerRun))
+                     .OrderBy(s => s.CommentsCheckedAt ?? DateTime.MinValue))
         {
+            if (CallsLeft(now) < 1) break;   // the rest wait for the next run
+            Spend(now, 1);
             try
             {
                 var fresh = await StoreCommentsAsync(s, c, await FetchCommentsAsync(s, c, ct), ct);
@@ -99,23 +135,24 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         await EmailNewCommentsAsync(c, ct);
     }
 
-    /// <summary>Numbers move fast in the first day, then settle.</summary>
+    /// <summary>Numbers: every 3 hours on the first day, then daily.</summary>
     private static bool StatsDue(SocialPost s, DateTime now)
     {
         var age = now - s.PublishedAt!.Value;
-        // A story's numbers can only be read while it is up (24 hours): hourly, and once more just before it goes
-        if (SocialService.IsStory(s.Platform)) return age < TimeSpan.FromHours(24) && (s.StatsAt is null || now - s.StatsAt >= TimeSpan.FromHours(1));
-        var every = age < TimeSpan.FromDays(1) ? TimeSpan.FromHours(1) : age < TimeSpan.FromDays(7) ? TimeSpan.FromHours(6) : TimeSpan.FromHours(24);
-        return s.StatsAt is null || now - s.StatsAt >= every;
+        // A story's numbers can only be read while it is up (24 hours)
+        if (SocialService.IsStory(s.Platform)) return age < TimeSpan.FromHours(24) && Due(s.StatsAt, now, TimeSpan.FromHours(3));
+        return Due(s.StatsAt, now, age < TimeSpan.FromDays(1) ? TimeSpan.FromHours(3) : TimeSpan.FromHours(24));
     }
 
-    /// <summary>Comments come mostly in the first days: every 10 minutes for 2 days, hourly for 2 weeks, then every 6 hours.</summary>
+    /// <summary>Comments come mostly in the first days: every 30 minutes for 2 days, every 2 hours for 2 weeks, then daily.</summary>
     private static bool CommentsDue(SocialPost s, DateTime now)
     {
         var age = now - s.PublishedAt!.Value;
-        var every = age < TimeSpan.FromDays(2) ? TimeSpan.FromMinutes(9) : age < TimeSpan.FromDays(14) ? TimeSpan.FromHours(1) : TimeSpan.FromHours(6);
-        return s.CommentsCheckedAt is null || now - s.CommentsCheckedAt >= every;
+        return Due(s.CommentsCheckedAt, now, age < TimeSpan.FromDays(2) ? TimeSpan.FromMinutes(30) : age < TimeSpan.FromDays(14) ? TimeSpan.FromHours(2) : TimeSpan.FromHours(24));
     }
+
+    // The worker runs every 10 minutes: a minute's slack so "every 30 minutes" doesn't become every 40
+    private static bool Due(DateTime? last, DateTime now, TimeSpan every) => last is null || now - last >= every - TimeSpan.FromMinutes(1);
 
     private Task<PostStats> StatsAsync(SocialPost s, SocialConfig c, CancellationToken ct) => s.Platform switch
     {

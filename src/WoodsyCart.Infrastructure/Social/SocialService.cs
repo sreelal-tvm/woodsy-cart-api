@@ -738,11 +738,28 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         foreach (var s in stuck) { s.Status = SocialPostStatus.Failed; s.LastError = "Interrupted while posting. Check the account before retrying, so it isn't posted twice."; }
         if (stuck.Count > 0) await db.SaveChangesAsync(ct);
 
-        var due = await db.SocialPosts.Where(s => s.Status == SocialPostStatus.Queued && s.ScheduledAt <= DateTime.UtcNow)
-            .OrderBy(s => s.ScheduledAt).ThenBy(s => s.ProductId).ThenBy(s => s.Platform).Take(10).ToListAsync(ct);
-        foreach (var s in due) await PublishAsync(s, c, ct);
-        return due.Count;
+        var now = DateTime.UtcNow;
+        var due = await db.SocialPosts.Where(s => s.Status == SocialPostStatus.Queued && s.ScheduledAt <= now)
+            .OrderBy(s => s.ScheduledAt).ThenBy(s => s.ProductId).ThenBy(s => s.Platform).Take(30).ToListAsync(ct);
+        // Posts that missed their time (disconnected, API stopped) go out one per account every 10 minutes, not all at once
+        var busy = (await db.SocialPosts.Where(s => s.PublishedAt > now.AddMinutes(-CatchUpMinutes)).Select(s => s.Platform).ToListAsync(ct))
+            .Select(Account).ToHashSet();
+        var done = 0;
+        foreach (var s in due)
+        {
+            if (done >= 10) break;
+            if (s.ScheduledAt < now.AddMinutes(-15) && !busy.Add(Account(s.Platform))) continue;
+            busy.Add(Account(s.Platform));
+            await PublishAsync(s, c, ct);
+            done++;
+        }
+        return done;
     }
+
+    private const int CatchUpMinutes = 10;
+
+    /// <summary>The account a post goes to: Instagram (posts, reels, stories), the Facebook Page, or Threads.</summary>
+    private static string Account(SocialPlatform p) => IsThreads(p) ? "Threads" : InstagramKinds.Contains(p) ? "Instagram" : "Facebook";
 
     private async Task PublishAsync(SocialPost s, SocialConfig c, CancellationToken ct)
     {
