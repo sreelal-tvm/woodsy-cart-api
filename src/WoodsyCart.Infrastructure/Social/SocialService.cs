@@ -21,13 +21,13 @@ public record SocialSettingsDto(
     bool ThreadsConnected, string? ThreadsAppId, string? ThreadsUsername, DateTime? ThreadsConnectedAt, DateTime? ThreadsTokenExpiresAt,
     bool ThreadsEnabled, string ThreadsTemplate, bool ThreadsCustomTemplate, string ThreadsDefaultTemplate, string? ThreadsTopic, string? ThreadsCallbackUrl,
     bool ReelsEnabled, string ReelTimes, bool ReelMusic, bool ReelsAvailable, List<SocialMusicTrack> MusicTracks,
-    bool StoriesEnabled, string StoryTimes);
+    bool StoriesEnabled, string StoryTimes, bool ReadComments, bool ReadStats);
 public record SocialMusicTrack(string Name, long Size);
 public record SocialSettingsUpdate(bool InstagramEnabled, bool FacebookEnabled, string? Template, bool IncludePrice, bool ShowMrp,
     string? WhatsApp, string? City, string? Hashtags, int MaxHashtags, string PostTimes, bool AutoQueueNewProducts,
     bool ThreadsEnabled = true, string? ThreadsTemplate = null, string? ThreadsTopic = "Furniture",
     bool ReelsEnabled = false, string? ReelTimes = "18:00", bool ReelMusic = true,
-    bool StoriesEnabled = false, string? StoryTimes = "19:00");
+    bool StoriesEnabled = false, string? StoryTimes = "19:00", bool ReadComments = false, bool ReadStats = false);
 public record ThreadsConnectRequest(string AppId, string AppSecret);
 public record SocialConnectRequest(string AppId, string AppSecret, string UserToken, string? PageId);
 public record SocialPageChoice(string Id, string Name, string? Instagram);
@@ -113,7 +113,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             c.ThreadsTemplate ?? SocialCaption.DefaultThreadsTemplate, c.ThreadsTemplate is not null, SocialCaption.DefaultThreadsTemplate,
             c.ThreadsTopic, ThreadsCallback(),
             c.ReelsEnabled, c.ReelTimes, c.ReelMusic, reels.Available, Music(),
-            c.StoriesEnabled, c.StoryTimes);
+            c.StoriesEnabled, c.StoryTimes, c.ReadComments, c.ReadStats);
     }
 
     public async Task SaveSettingsAsync(SocialSettingsUpdate r)
@@ -148,6 +148,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                 .ExecuteUpdateAsync(u => u.SetProperty(x => x.Status, SocialPostStatus.Removed).SetProperty(x => x.ScheduledAt, (DateTime?)null));
         c.StoriesEnabled = r.StoriesEnabled;
         if (storyTimes.Count > 0) c.StoryTimes = string.Join(",", storyTimes.Select(t => t.ToString(@"hh\:mm")));
+        c.ReadComments = r.ReadComments; c.ReadStats = r.ReadStats;
         await db.SaveChangesAsync();
     }
 

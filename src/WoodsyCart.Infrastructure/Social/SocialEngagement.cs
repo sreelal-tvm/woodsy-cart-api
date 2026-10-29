@@ -71,7 +71,8 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         var c = await social.ConfigAsync();
         var metaOn = SocialService.IsConnected(c);
         var threadsOn = SocialService.ThreadsConnected(c);
-        if (!metaOn && !threadsOn) return;
+        // Each kind of reading can be switched off (Settings → Comments and numbers): then none of its calls are made
+        if ((!metaOn && !threadsOn) || (!c.ReadStats && !c.ReadComments)) return;
         var now = DateTime.UtcNow;
         var posts = await db.SocialPosts.Where(s => SocialService.Live.Contains(s.Status) && s.ExternalId != null && s.PublishedAt > now.AddDays(-MaxAgeDays))
             .ToListAsync(ct);
@@ -81,7 +82,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
 
         // Comments matter more than numbers: numbers get at most half of what is left this hour
         var statsBudget = CallsLeft(now) / 2;
-        foreach (var s in posts.Where(s => StatsDue(s, now)).OrderBy(s => s.StatsAt ?? DateTime.MinValue))
+        foreach (var s in posts.Where(s => c.ReadStats && StatsDue(s, now)).OrderBy(s => s.StatsAt ?? DateTime.MinValue))
         {
             var cost = Cost(s.Platform, stats: true);
             if (cost > statsBudget) break;
@@ -108,7 +109,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         await db.SaveChangesAsync(ct);
 
         // Story replies arrive as messages, not comments
-        foreach (var s in posts.Where(s => !SocialService.IsStory(s.Platform) && CommentsDue(s, now) && !issues.ContainsKey(Group(s.Platform) + ":comments"))
+        foreach (var s in posts.Where(s => c.ReadComments && !SocialService.IsStory(s.Platform) && CommentsDue(s, now) && !issues.ContainsKey(Group(s.Platform) + ":comments"))
                      .OrderBy(s => s.CommentsCheckedAt ?? DateTime.MinValue))
         {
             if (CallsLeft(now) < 1) break;   // the rest wait for the next run
@@ -131,7 +132,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         }
         c.EngagementIssues = issues.Count == 0 ? null : JsonSerializer.Serialize(issues);
         await db.SaveChangesAsync(ct);
-        await AutoSendAsync(c, ct);
+        if (c.ReadComments) await AutoSendAsync(c, ct);
         await EmailNewCommentsAsync(c, ct);
     }
 
@@ -494,10 +495,18 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
             .Select(p => new SocialTopPost(p.Post.Id, p.Post.ProductId, p.Name, p.Image, p.Post.Platform, p.Post.Permalink, p.Post.PublishedAt, SocialStats.Of(p.Post)!))
             .ToList();
         var c = await social.ConfigAsync();
-        return new SocialPerformance(days, platforms, top, Issues(c).Values.Distinct().ToList(), posts.Max(p => p.Post.StatsAt));
+        return new SocialPerformance(days, platforms, top, Notes(c, c.ReadStats, "Reading the numbers is switched off (Settings → Comments and numbers): the figures below are from before."),
+            posts.Max(p => p.Post.StatsAt));
     }
 
-    public async Task<List<string>> IssuesAsync() => Issues(await social.ConfigAsync()).Values.Distinct().ToList();
+    public async Task<List<string>> IssuesAsync()
+    {
+        var c = await social.ConfigAsync();
+        return Notes(c, c.ReadComments, "Reading comments is switched off (Settings → Comments and numbers): new comments don't show here until it is on.");
+    }
+
+    private static List<string> Notes(SocialConfig c, bool on, string off) =>
+        (on ? [] : new List<string> { off }).Concat(Issues(c).Values).Distinct().ToList();
 
     // ---------- Permission problems ----------
 

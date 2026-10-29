@@ -2572,6 +2572,12 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<bool>("ReadComments")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("ReadStats")
+                        .HasColumnType("bit");
+
                     b.Property<bool>("ReelMusic")
                         .HasColumnType("bit");
 

@@ -48,6 +48,9 @@ public class SocialConfig : BaseEntity
     // Performance and comments: problems reading them (usually a permission not granted yet), as JSON {"Meta:stats": "…"};
     // cleared when that account is connected again
     public string? EngagementIssues { get; set; }
+    // Reading comments / numbers from the accounts at all (off = the worker makes none of those calls; replying by hand still works)
+    public bool ReadComments { get; set; }
+    public bool ReadStats { get; set; }
     public DateTime? CommentsEmailedAt { get; set; }      // last "new comments" email (at most one every 30 minutes)
 
     // Reply assistant: answers price / size / colour … questions from the product's details (keyword rules, then Claude for
