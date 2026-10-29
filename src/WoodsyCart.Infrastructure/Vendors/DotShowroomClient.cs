@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -22,7 +23,11 @@ public class DotShowroomClient(HttpClient http)
 
     public async Task<DsItem?> GetItemAsync(long storeId, long itemId, CancellationToken ct)
     {
-        var res = await http.GetFromJsonAsync<DsEnvelope>($"dotk/vo1/products/item?store_id={storeId}&item_id={itemId}", Json, ct);
+        using var response = await http.GetAsync($"dotk/vo1/products/item?store_id={storeId}&item_id={itemId}", ct);
+        // The vendor's API answers some products with "301 Moved Permanently" (no new address) but still sends the whole
+        // product — variants and their photos included — in the body
+        if (response.StatusCode is not (HttpStatusCode.MovedPermanently or HttpStatusCode.Found)) response.EnsureSuccessStatusCode();
+        var res = await response.Content.ReadFromJsonAsync<DsEnvelope>(Json, ct);
         if (res is null || !res.Status || string.IsNullOrEmpty(res.Data)) return null;
         return JsonSerializer.Deserialize<DsItem>(res.Data, Json);
     }

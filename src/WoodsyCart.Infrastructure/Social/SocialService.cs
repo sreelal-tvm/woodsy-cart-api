@@ -297,9 +297,10 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         .Where(i => i.MediaType == MediaType.Image && i.LocalPath != null)
         .OrderBy(i => i.VariantId != null).ThenBy(i => i.SortOrder).ThenBy(i => i.Id).Select(i => i.LocalPath!).Take(SocialCaption.MaxPhotos).ToList();
 
-    private async Task<PostContent> ContentAsync(Product p, SocialConfig c, string? overrideCaption, SocialPlatform platform, BusinessSettings? biz = null) =>
+    private async Task<PostContent> ContentAsync(Product p, SocialConfig c, string? overrideCaption, SocialPlatform platform, BusinessSettings? biz = null,
+        bool tagWords = true) =>
         SocialCaption.Build(p, c, biz ?? await db.BusinessSettings.AsNoTracking().FirstAsync(), overrideCaption, Photos(p),
-            IsThreads(platform), email.StorefrontUrl);
+            IsThreads(platform), email.StorefrontUrl, tagWords);
 
     public async Task<SocialProductDto> ProductAsync(int productId)
     {
@@ -895,7 +896,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         {
             if (!products.TryGetValue(s.ProductId, out var p)) continue;   // product deleted: the post stays as it is
             var content = await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz);
-            if (content.Hash == s.ContentHash)
+            // Posts made before the [keywords] line was added still match: no wave of edits or "out of date" for that alone
+            if (content.Hash == s.ContentHash || (await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz, tagWords: false)).Hash == s.ContentHash)
             {
                 if (s.Status == SocialPostStatus.OutOfDate) { s.Status = SocialPostStatus.Published; changed++; }
                 continue;

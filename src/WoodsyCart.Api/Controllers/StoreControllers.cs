@@ -152,7 +152,8 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
             s.ShippingFee, s.FreeShippingThreshold, s.CodEnabled, s.CodFee, s.CodMaxOrderAmount,
             online, methods.Any(m => m.Provider == PaymentProviders.Razorpay) ? rzp.KeyId : null,
             s.InstagramUrl, s.FacebookUrl, s.YoutubeUrl, s.DefaultDeliveryDays,
-            s.MapsEnabled && !string.IsNullOrWhiteSpace(s.GoogleMapsApiKey) ? s.GoogleMapsApiKey : null);
+            s.MapsEnabled && !string.IsNullOrWhiteSpace(s.GoogleMapsApiKey) ? s.GoogleMapsApiKey : null,
+            string.IsNullOrWhiteSpace(s.SupportHours) ? null : s.SupportHours.Trim());
     }
 
     [OutputCache(PolicyName = Traffic.Catalog)]

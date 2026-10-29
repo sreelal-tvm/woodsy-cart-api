@@ -151,6 +151,7 @@ public class BusinessSettings : BaseEntity
     public string Pincode { get; set; } = "";
     public string Phone { get; set; } = "";
     public string? WhatsApp { get; set; }
+    public string? SupportHours { get; set; } = "Mon–Sat, 10am–7pm";   // shown under the phone number on Contact us; empty = not shown
     public string Email { get; set; } = "";
     public string? Website { get; set; }
     public string? LogoUrl { get; set; }

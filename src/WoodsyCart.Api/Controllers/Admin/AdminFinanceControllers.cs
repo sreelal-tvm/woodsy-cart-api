@@ -451,6 +451,8 @@ public class SettingsController(AppDbContext db, PricingService pricing) : Admin
         var s = await db.BusinessSettings.FirstAsync();
         if (r.DefaultGstRate is < 0 or > 28) throw new AppException("GST % must be between 0 and 28.");
         r.GoogleMapsApiKey = string.IsNullOrWhiteSpace(r.GoogleMapsApiKey) ? null : r.GoogleMapsApiKey.Trim();
+        r.SupportHours = string.IsNullOrWhiteSpace(r.SupportHours) ? null : r.SupportHours.Trim();
+        if (r.SupportHours?.Length > 100) throw new AppException("Phone support hours can be at most 100 characters.");
         if (r.MapsEnabled && r.GoogleMapsApiKey is null) throw new AppException("Paste your Google Maps API key before switching maps on.");
         var repriced = s.DefaultCommissionPercent != r.DefaultCommissionPercent || s.PriceRounding != r.PriceRounding
                        || s.VendorPricesIncludeGst != r.VendorPricesIncludeGst;

@@ -68,8 +68,10 @@ public static partial class SocialCaption
 
     /// <param name="threads">Threads: its own short template, no "link in bio" (links work there), at most 500 characters.</param>
     /// <param name="storeUrl">Storefront address for {url}, e.g. https://woodsycart.com</param>
+    /// <param name="tagWords">The hashtags' words again in brackets under them, e.g. [FurnitureBangalore, HomeDecor] (from 29 Oct 2026;
+    /// false = the format of earlier posts).</param>
     public static PostContent Build(Product p, SocialConfig cfg, BusinessSettings biz, string? overrideCaption, List<string> photos,
-        bool threads = false, string? storeUrl = null)
+        bool threads = false, string? storeUrl = null, bool tagWords = true)
     {
         var inr = CultureInfo.GetCultureInfo("en-IN");
         string Money(decimal v) => "₹" + v.ToString("#,##0", inr);
@@ -129,7 +131,7 @@ public static partial class SocialCaption
             ["search"] = p.Name.Trim().ToLowerInvariant(),
             ["code"] = Code(p.Id),
             ["whatsapp"] = Phone(cfg.WhatsApp ?? biz.WhatsApp),
-            ["hashtags"] = Hashtags(p, cfg, city)
+            ["hashtags"] = Hashtags(p, cfg, city, tagWords)
         };
 
         var caption = string.IsNullOrWhiteSpace(overrideCaption)
@@ -228,7 +230,7 @@ public static partial class SocialCaption
         return BlankRuns().Replace(text, "\n\n").Trim();
     }
 
-    private static string Hashtags(Product p, SocialConfig cfg, string city)
+    private static string Hashtags(Product p, SocialConfig cfg, string city, bool tagWords)
     {
         var cityTag = city.Equals("Bengaluru", StringComparison.OrdinalIgnoreCase) ? "Bangalore" : Tag(city);
         var category = p.Category is null ? "" : Tag(p.Category.Name);
@@ -236,7 +238,9 @@ public static partial class SocialCaption
         if (category.Length > 0) { tags.Add(category); tags.Add(category + cityTag); }
         tags.AddRange((cfg.Hashtags ?? "").Split([' ', ',', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(Tag));
         tags.AddRange(p.Tags.Select(t => Tag(t.Name)));
-        return string.Join(" ", tags.Where(t => t.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).Take(Math.Clamp(cfg.MaxHashtags, 1, 30)).Select(t => "#" + t));
+        var used = tags.Where(t => t.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).Take(Math.Clamp(cfg.MaxHashtags, 1, 30)).ToList();
+        var line = string.Join(" ", used.Select(t => "#" + t));
+        return tagWords && used.Count > 0 ? $"{line}\n[{string.Join(", ", used)}]" : line;
     }
 
     private static string Tag(string s) =>

@@ -77,6 +77,7 @@ public partial class VendorSyncService(
             // 2. Product details (variants, all images, collections) — throttled to be polite to the vendor's API
             progress.Stage = "Downloading product details";
             var details = new ConcurrentDictionary<long, DsItem>();
+            var listingOnly = new ConcurrentDictionary<long, bool>();   // details not readable: only the short listing data
             using (var gate = new SemaphoreSlim(4))
             {
                 var tasks = itemCategory.Keys.Select(async id =>
@@ -86,12 +87,14 @@ public partial class VendorSyncService(
                     {
                         var item = await RetryAsync(() => client.GetItemAsync(storeId, id, ct), ct);
                         details[id] = item ?? listed[id];
+                        if (item is null) listingOnly[id] = true;
                     }
                     catch (Exception ex)
                     {
                         // Some listings have no detail page (renamed/redirected); the listing data still has price, images and description.
                         logger.LogInformation("Vendor item {Id} has no detail page ({Msg}); using listing data", id, ex.Message);
                         details[id] = listed[id];
+                        listingOnly[id] = true;
                     }
                     finally
                     {
@@ -125,7 +128,8 @@ public partial class VendorSyncService(
                 if (!categoryMap.TryGetValue(catVendorId, out var categoryId))
                     categoryId = categoryMap[itemCategory[item.Id].Id];
 
-                var (added, priceChanged) = await UpsertProductAsync(item, vendor, categoryId, collectionMap, tagMap, settings, slugs, options, ct);
+                var (added, priceChanged) = await UpsertProductAsync(item, vendor, categoryId, collectionMap, tagMap, settings, slugs, options,
+                    listingOnly.ContainsKey(item.Id), ct);
                 if (added) log.ProductsAdded++; else log.ProductsUpdated++;
                 if (priceChanged) log.PriceChanges++;
 
@@ -138,6 +142,7 @@ public partial class VendorSyncService(
             }
             await db.SaveChangesAsync(ct);
             db.ChangeTracker.Clear();
+            await LinkVariantImagesAsync(vendor.Id, details.Values.Where(d => !listingOnly.ContainsKey(d.Id)).ToList(), ct);
 
             // 5. Products that disappeared from the vendor store become unavailable (kept for order history).
             var missing = await db.Products
@@ -258,7 +263,7 @@ public partial class VendorSyncService(
     private async Task<(bool added, bool priceChanged)> UpsertProductAsync(
         DsItem item, Vendor vendor, int categoryId,
         Dictionary<long, int> collectionMap, Dictionary<long, int> tagMap,
-        BusinessSettings settings, HashSet<string> slugs, SyncOptions options, CancellationToken ct)
+        BusinessSettings settings, HashSet<string> slugs, SyncOptions options, bool listingOnly, CancellationToken ct)
     {
         var p = await db.Products.IgnoreQueryFilters()
             .Include(x => x.Images)
@@ -320,7 +325,8 @@ public partial class VendorSyncService(
                 if (variant is not null && v.Images is { Count: > 0 }) SyncImages(p, v.Images, variant);
             }
 
-        if (added || !p.LockContent)
+        // Without the details the listing has no variants: their photos are not "gone" and stay
+        if ((added || !p.LockContent) && !listingOnly)
         {
             var current = (item.Images ?? []).Concat((item.Variants ?? []).SelectMany(v => v.Images ?? []))
                 .Select(i => i.ImageId).ToHashSet();
@@ -354,6 +360,36 @@ public partial class VendorSyncService(
         var category = await db.Categories.FindAsync([p.CategoryId], ct);
         PricingService.Apply(p, category, settings);
         return (added, priceChanged);
+    }
+
+    /// <summary>Links each vendor variant photo to its variant (a new variant has no id yet while its photos are added, so
+    /// this runs after saving), so the product page shows the chosen colour's / size's photos. A photo the vendor uses for
+    /// several variants, or for the product itself, stays shared.</summary>
+    private async Task LinkVariantImagesAsync(int vendorId, List<DsItem> items, CancellationToken ct)
+    {
+        var owner = new Dictionary<long, long?>();   // vendor image id → its only vendor variant id (null = shared)
+        foreach (var item in items)
+        {
+            foreach (var img in item.Images ?? []) owner[img.ImageId] = null;
+            foreach (var v in item.Variants ?? [])
+                foreach (var img in v.Images ?? [])
+                    owner[img.ImageId] = owner.TryGetValue(img.ImageId, out var o) && o != v.VariantId ? null : v.VariantId;
+        }
+        var ids = items.Select(i => i.Id).ToList();
+        var products = await db.Products.IgnoreQueryFilters()
+            .Where(p => p.VendorId == vendorId && p.VendorProductId != null && ids.Contains(p.VendorProductId.Value) && !p.LockContent)
+            .Include(p => p.Images).Include(p => p.Variants).ToListAsync(ct);
+        foreach (var p in products)
+            foreach (var img in p.Images.Where(i => i.VendorImageId is not null && owner.ContainsKey(i.VendorImageId.Value)))
+            {
+                var vendorVariant = owner[img.VendorImageId!.Value];
+                var variant = vendorVariant is null ? null : p.Variants.FirstOrDefault(v => v.VendorVariantId == vendorVariant);
+                if (img.VariantId == variant?.Id) continue;
+                img.VariantId = variant?.Id;
+                img.SortOrder = variant is null ? img.SortOrder : 100 + variant.SortOrder;
+            }
+        await db.SaveChangesAsync(ct);
+        db.ChangeTracker.Clear();
     }
 
     private void SyncImages(Product p, List<DsImage> images, ProductVariant? variant)
