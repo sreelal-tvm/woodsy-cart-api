@@ -141,7 +141,7 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
     [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("settings")]
     [HttpHead("settings")] // uptime monitors check with HEAD
-    public async Task<PublicSettingsDto> Settings()
+    public async Task<PublicSettingsDto> Settings([FromServices] VisitStatsService visits)
     {
         var s = await db.BusinessSettings.AsNoTracking().FirstAsync();
         var methods = await payments.GetCheckoutMethodsAsync();
@@ -153,8 +153,15 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
             online, methods.Any(m => m.Provider == PaymentProviders.Razorpay) ? rzp.KeyId : null,
             s.InstagramUrl, s.FacebookUrl, s.YoutubeUrl, s.DefaultDeliveryDays,
             s.MapsEnabled && !string.IsNullOrWhiteSpace(s.GoogleMapsApiKey) ? s.GoogleMapsApiKey : null,
-            string.IsNullOrWhiteSpace(s.SupportHours) ? null : s.SupportHours.Trim());
+            string.IsNullOrWhiteSpace(s.SupportHours) ? null : s.SupportHours.Trim(), await visits.IsEnabledAsync(),
+            string.IsNullOrWhiteSpace(s.ThreadsUrl) ? null : s.ThreadsUrl.Trim());
     }
+
+    /// <summary>Visitor statistics: the storefront checks in when it opens and once a minute while it is on screen.</summary>
+    [HttpPost("visit")]
+    public Task<VisitPingResult> Visit(VisitPing r, [FromServices] VisitStatsService visits) =>
+        visits.PingAsync(r, User.IsInRole(nameof(UserRole.Customer)) ? OptionalUserId : null,
+            User.Identity?.IsAuthenticated == true && !User.IsInRole(nameof(UserRole.Customer)), Request.Headers.UserAgent.ToString());
 
     [OutputCache(PolicyName = Traffic.Catalog)]
     [HttpGet("pincode/{pincode}")]

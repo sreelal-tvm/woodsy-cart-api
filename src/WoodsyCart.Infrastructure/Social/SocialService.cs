@@ -298,9 +298,13 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         .OrderBy(i => i.VariantId != null).ThenBy(i => i.SortOrder).ThenBy(i => i.Id).Select(i => i.LocalPath!).Take(SocialCaption.MaxPhotos).ToList();
 
     private async Task<PostContent> ContentAsync(Product p, SocialConfig c, string? overrideCaption, SocialPlatform platform, BusinessSettings? biz = null,
-        bool tagWords = true) =>
+        bool tagWords = true, bool tagLinks = true) =>
         SocialCaption.Build(p, c, biz ?? await db.BusinessSettings.AsNoTracking().FirstAsync(), overrideCaption, Photos(p),
-            IsThreads(platform), email.StorefrontUrl, tagWords);
+            IsThreads(platform), email.StorefrontUrl, tagWords, tagLinks ? LinkSource(platform) : null);
+
+    /// <summary>utm_source for links in posts (matches the storefront's visitor sources).</summary>
+    private static string LinkSource(SocialPlatform p) =>
+        IsThreads(p) ? VisitSources.Threads : InstagramKinds.Contains(p) ? VisitSources.Instagram : VisitSources.Facebook;
 
     public async Task<SocialProductDto> ProductAsync(int productId)
     {
@@ -896,8 +900,10 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         {
             if (!products.TryGetValue(s.ProductId, out var p)) continue;   // product deleted: the post stays as it is
             var content = await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz);
-            // Posts made before the [keywords] line was added still match: no wave of edits or "out of date" for that alone
-            if (content.Hash == s.ContentHash || (await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz, tagWords: false)).Hash == s.ContentHash)
+            // Posts made before the [keywords] line or the link tags were added still match: no wave of edits or "out of date" for that alone
+            if (content.Hash == s.ContentHash
+                || (await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz, tagLinks: false)).Hash == s.ContentHash
+                || (await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz, tagWords: false, tagLinks: false)).Hash == s.ContentHash)
             {
                 if (s.Status == SocialPostStatus.OutOfDate) { s.Status = SocialPostStatus.Published; changed++; }
                 continue;

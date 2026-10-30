@@ -33,6 +33,8 @@ public static class DependencyInjection
         services.AddScoped<OfferService>();
         services.AddScoped<ProductOptionsService>();
         services.AddHostedService<OfferPriceWorker>();
+        services.AddScoped<VisitStatsService>();
+        services.AddHostedService<ServerRunWorker>();
         services.AddScoped<EmailSender>();
         services.AddScoped<Email.EmailSettingsService>();
         services.AddSingleton<Email.EmailQueue>();

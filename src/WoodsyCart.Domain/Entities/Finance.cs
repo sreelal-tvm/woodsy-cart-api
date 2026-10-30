@@ -189,4 +189,5 @@ public class BusinessSettings : BaseEntity
     public string? InstagramUrl { get; set; }
     public string? FacebookUrl { get; set; }
     public string? YoutubeUrl { get; set; }
+    public string? ThreadsUrl { get; set; }
 }

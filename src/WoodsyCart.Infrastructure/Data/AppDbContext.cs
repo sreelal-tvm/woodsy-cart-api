@@ -49,6 +49,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<SocialPost> SocialPosts => Set<SocialPost>();
     public DbSet<SocialComment> SocialComments => Set<SocialComment>();
     public DbSet<EmailLog> EmailLogs => Set<EmailLog>();
+    public DbSet<Visit> Visits => Set<Visit>();
+    public DbSet<ServerRun> ServerRuns => Set<ServerRun>();
+    public DbSet<VisitStatsPause> VisitStatsPauses => Set<VisitStatsPause>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
     {
@@ -115,6 +118,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         });
         b.Entity<EmailConfig>(e => { e.Property(x => x.PasswordProtected).HasMaxLength(2000); e.Property(x => x.AdminEmails).HasMaxLength(1000); e.Property(x => x.EventsJson).HasMaxLength(4000); });
         b.Entity<EmailLog>(e => e.HasIndex(x => x.CreatedAt));
+        b.Entity<Visit>(e =>
+        {
+            e.HasIndex(x => x.LastSeenAt);
+            e.HasIndex(x => x.VisitorId);
+            e.HasIndex(x => x.UserId);
+            e.Property(x => x.Source).HasMaxLength(20);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
+        });
 
         b.Entity<Product>(e =>
         {

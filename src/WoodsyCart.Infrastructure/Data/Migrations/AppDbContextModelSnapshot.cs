@@ -454,6 +454,10 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("ThreadsUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 
@@ -2337,6 +2341,28 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.ToTable("Reviews");
                 });
 
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.ServerRun", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("LastAliveAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ServerRuns");
+                });
+
             modelBuilder.Entity("WoodsyCart.Domain.Entities.ServiceablePincode", b =>
                 {
                     b.Property<int>("Id")
@@ -2996,6 +3022,70 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.ToTable("VendorSyncLogs");
                 });
 
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.Visit", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("ActiveSeconds")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("LastSeenAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("UserId")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("VisitorId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LastSeenAt");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("VisitorId");
+
+                    b.ToTable("Visits");
+                });
+
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.VisitStatsPause", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("EndedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("VisitStatsPauses");
+                });
+
             modelBuilder.Entity("WoodsyCart.Domain.Entities.WishlistItem", b =>
                 {
                     b.Property<int>("Id")
@@ -3389,6 +3479,16 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Navigation("Order");
 
                     b.Navigation("Vendor");
+                });
+
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.Visit", b =>
+                {
+                    b.HasOne("WoodsyCart.Domain.Entities.AppUser", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("WoodsyCart.Domain.Entities.WishlistItem", b =>

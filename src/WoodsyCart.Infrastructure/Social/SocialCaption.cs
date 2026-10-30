@@ -70,8 +70,10 @@ public static partial class SocialCaption
     /// <param name="storeUrl">Storefront address for {url}, e.g. https://woodsycart.com</param>
     /// <param name="tagWords">The hashtags' words again in brackets under them, e.g. [FurnitureBangalore, HomeDecor] (from 29 Oct 2026;
     /// false = the format of earlier posts).</param>
+    /// <param name="linkSource">Added to the {url} link as ?utm_source=…, so Admin → Visitors can tell where visitors came from
+    /// (from 30 Oct 2026; null = the format of earlier posts).</param>
     public static PostContent Build(Product p, SocialConfig cfg, BusinessSettings biz, string? overrideCaption, List<string> photos,
-        bool threads = false, string? storeUrl = null, bool tagWords = true)
+        bool threads = false, string? storeUrl = null, bool tagWords = true, string? linkSource = null)
     {
         var inr = CultureInfo.GetCultureInfo("en-IN");
         string Money(decimal v) => "₹" + v.ToString("#,##0", inr);
@@ -107,7 +109,7 @@ public static partial class SocialCaption
             .Select(l => "• " + Sentence(l)).ToList();
 
         var website = Clean(biz.Website) is { } w ? SchemePrefix().Replace(w, "").TrimEnd('/') : "woodsycart.com";
-        var url = $"{(Clean(storeUrl) ?? "https://" + website).TrimEnd('/')}/product/{p.Slug}";
+        var url = $"{(Clean(storeUrl) ?? "https://" + website).TrimEnd('/')}/product/{p.Slug}{(linkSource is null ? "" : "?utm_source=" + linkSource)}";
         var hook = Clean(p.MetaDescription)
             ?? $"{p.Name}{(colours.Count > 0 ? " in " + string.Join(", ", colours) : "")}, {(p.AssemblyIncluded ? "delivered and assembled at your home" : "delivered to your home")} in {city}.";
 

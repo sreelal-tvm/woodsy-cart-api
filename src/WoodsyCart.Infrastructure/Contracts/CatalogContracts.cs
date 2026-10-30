@@ -79,7 +79,8 @@ public record PublicSettingsDto(
     string BusinessName, string? Tagline, string Phone, string? WhatsApp, string Email,
     string Address, decimal ShippingFee, decimal FreeShippingThreshold,
     bool CodEnabled, decimal CodFee, decimal CodMaxOrderAmount, bool OnlinePaymentEnabled, string? RazorpayKeyId,
-    string? InstagramUrl, string? FacebookUrl, string? YoutubeUrl, int DefaultDeliveryDays, string? MapsApiKey = null, string? SupportHours = null);
+    string? InstagramUrl, string? FacebookUrl, string? YoutubeUrl, int DefaultDeliveryDays, string? MapsApiKey = null, string? SupportHours = null,
+    bool VisitStats = false, string? ThreadsUrl = null);
 
 /// <summary>NearBengaluru: not on the delivery list, but the pinned spot is close enough that the customer should ask us on WhatsApp.</summary>
 public record PincodeCheckDto(string Pincode, bool Serviceable, int DeliveryDays, decimal ExtraCharge, bool CodAvailable, string? Area, string Message, bool NearBengaluru = false);
