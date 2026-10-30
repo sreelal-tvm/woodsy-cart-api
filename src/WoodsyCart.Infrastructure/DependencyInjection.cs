@@ -39,6 +39,11 @@ public static class DependencyInjection
         services.AddScoped<Email.EmailSettingsService>();
         services.AddSingleton<Email.EmailQueue>();
         services.AddHostedService<Email.EmailWorker>();
+        services.AddHttpClient("push", c => c.Timeout = TimeSpan.FromSeconds(20));
+        services.AddScoped<Push.WebPushClient>();
+        services.AddScoped<Push.PushService>();
+        services.AddSingleton<Push.PushQueue>();
+        services.AddHostedService<Push.PushWorker>();
         services.AddScoped<DbSeeder>();
         services.AddHttpClient<RazorpayService>();
         services.AddHttpClient<Payments.Gateways.PhonePeGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));

@@ -52,6 +52,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Visit> Visits => Set<Visit>();
     public DbSet<ServerRun> ServerRuns => Set<ServerRun>();
     public DbSet<VisitStatsPause> VisitStatsPauses => Set<VisitStatsPause>();
+    public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
+    public DbSet<PushConfig> PushConfigs => Set<PushConfig>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
     {
@@ -133,6 +135,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.Source).HasMaxLength(20);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
         });
+        b.Entity<PushSubscription>(e =>
+        {
+            e.Property(x => x.Endpoint).HasMaxLength(1000);
+            e.HasIndex(x => x.Endpoint).IsUnique();
+            e.Property(x => x.P256dh).HasMaxLength(200);
+            e.Property(x => x.Auth).HasMaxLength(100);
+            e.Property(x => x.Device).HasMaxLength(100);
+            e.Property(x => x.LastError).HasMaxLength(500);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+        b.Entity<PushConfig>(e => { e.Property(x => x.PublicKey).HasMaxLength(200); e.Property(x => x.PrivateKeyProtected).HasMaxLength(2000); });
 
         b.Entity<Product>(e =>
         {
