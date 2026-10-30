@@ -68,6 +68,9 @@ public class Order : BaseEntity
     public string? CustomerUtr { get; set; }
     /// <summary>Secret for viewing/paying the order without signing in (guest checkout links).</summary>
     public string AccessToken { get; set; } = Guid.NewGuid().ToString("N");
+    /// <summary>App notification reminders already sent for this order.</summary>
+    public DateTime? PaymentReminderAt { get; set; }
+    public DateTime? ReviewReminderAt { get; set; }
 
     public ICollection<OrderItem> Items { get; set; } = [];
     public ICollection<OrderStatusHistory> History { get; set; } = [];

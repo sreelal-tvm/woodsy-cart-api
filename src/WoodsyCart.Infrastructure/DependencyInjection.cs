@@ -44,6 +44,7 @@ public static class DependencyInjection
         services.AddScoped<Push.PushService>();
         services.AddSingleton<Push.PushQueue>();
         services.AddHostedService<Push.PushWorker>();
+        services.AddHostedService<Push.PushAutomationWorker>();
         services.AddScoped<DbSeeder>();
         services.AddHttpClient<RazorpayService>();
         services.AddHttpClient<Payments.Gateways.PhonePeGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));

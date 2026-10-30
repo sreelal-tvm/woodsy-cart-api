@@ -35,11 +35,6 @@ public partial class OrderService
             $"Payment: <b>{PaymentLabel(order)}</b> · {(paid ? "paid" : order.AmountPaid > 0 ? $"{Rs(order.AmountPaid)} paid" : "not paid yet")}</p>" +
             OrderTable(order, items) + (string.IsNullOrWhiteSpace(order.CustomerNotes) ? "" : Info("Customer note: " + E(order.CustomerNotes))),
             ("Open the order", email.AdminOrderLink(order)), order.Id);
-
-        // Phones and computers that turned on Admin notifications
-        await push.AdminsAsync(new Push.AdminPush($"🛒 New order {Rs(order.Total)}",
-            $"{order.OrderNumber} · {order.ShipName}, {order.ShipCity} · {ChannelName(order.Channel)} · {(paid ? "paid" : order.AmountPaid > 0 ? $"{Rs(order.AmountPaid)} paid" : "not paid yet")}",
-            email.AdminOrderLink(order), "order-" + order.Id));
     }
 
     /// <summary>A payment was received (gateway, UPI/bank alert, or recorded by the team).</summary>

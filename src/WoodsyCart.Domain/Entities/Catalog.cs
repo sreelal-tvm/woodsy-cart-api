@@ -91,6 +91,8 @@ public class Product : BaseEntity
     /// <summary>When true, vendor sync only refreshes cost/availability and keeps our name/description/images.</summary>
     public bool LockContent { get; set; }
     public DateTime? LastSyncedAt { get; set; }
+    /// <summary>When the product went out in a "new arrivals" app notification (empty = not yet).</summary>
+    public DateTime? PushAnnouncedAt { get; set; }
 
     public string? MetaTitle { get; set; }
     public string? MetaDescription { get; set; }
@@ -242,6 +244,8 @@ public class Offer : BaseEntity
     public OfferScope Scope { get; set; }
     /// <summary>Optional coupon code advertised with the offer (the coupon itself is set up under Coupons).</summary>
     public string? CouponCode { get; set; }
+    /// <summary>When customers got the "offer is live" app notification (once per offer).</summary>
+    public DateTime? PushSentAt { get; set; }
 
     public ICollection<Category> Categories { get; set; } = [];
     public ICollection<Product> Products { get; set; } = [];

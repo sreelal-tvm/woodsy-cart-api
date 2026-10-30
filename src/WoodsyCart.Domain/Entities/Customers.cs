@@ -59,6 +59,9 @@ public class WishlistItem : BaseEntity
     public int UserId { get; set; }
     public int ProductId { get; set; }
     public Product? Product { get; set; }
+    /// <summary>Price and stock last seen for price-drop / back-in-stock app notifications.</summary>
+    public decimal? SeenPrice { get; set; }
+    public bool SeenAvailable { get; set; } = true;
 }
 
 public class Enquiry : BaseEntity

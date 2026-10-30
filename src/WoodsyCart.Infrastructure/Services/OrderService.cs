@@ -12,7 +12,7 @@ namespace WoodsyCart.Infrastructure.Services;
 public record OrderAccess(int? UserId, string? Token);
 
 public partial class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender email, PaymentConfigService payments,
-    Payments.Gateways.GatewayRegistry gateways, Push.PushService push)
+    Payments.Gateways.GatewayRegistry gateways)
 {
     public const int ReturnWindowDays = 7;
 

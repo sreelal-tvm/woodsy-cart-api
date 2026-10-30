@@ -27,10 +27,12 @@ public class WebPushClient(IHttpClientFactory http)
         return (B64.Encode([0x04, .. p.Q.X!, .. p.Q.Y!]), B64.Encode(p.D!));
     }
 
+    private static readonly JsonSerializerOptions NoNulls = new() { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
+
     public async Task<PushResult> SendAsync(PushTarget to, object payload, string publicKey, string privateKey, string subject, CancellationToken ct = default)
     {
         byte[] body;
-        try { body = Encrypt(JsonSerializer.SerializeToUtf8Bytes(payload), B64.Decode(to.P256dh), B64.Decode(to.Auth)); }
+        try { body = Encrypt(JsonSerializer.SerializeToUtf8Bytes(payload, NoNulls), B64.Decode(to.P256dh), B64.Decode(to.Auth)); }
         catch (Exception e) when (e is CryptographicException or FormatException) { return new(false, true, "The device's keys are not valid."); }
 
         var endpoint = new Uri(to.Endpoint);
@@ -38,7 +40,7 @@ public class WebPushClient(IHttpClientFactory http)
         req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         req.Content.Headers.ContentEncoding.Add("aes128gcm");
         req.Headers.Add("TTL", "86400");      // keep for a day if the phone is offline
-        req.Headers.Add("Urgency", "high");   // new orders: show straight away
+        req.Headers.Add("Urgency", "high");   // show straight away
         req.Headers.Authorization = new AuthenticationHeaderValue("vapid",
             $"t={VapidToken(endpoint.GetLeftPart(UriPartial.Authority), subject, publicKey, privateKey)}, k={publicKey}");
 

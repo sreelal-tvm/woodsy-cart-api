@@ -23,10 +23,11 @@ public class SmtpOptions
 }
 
 /// <summary>
-/// Queues branded emails to customers and to the admin team. Each notification can be switched off in Admin;
-/// sending happens in the background (<see cref="EmailWorker"/>) and every attempt is logged.
+/// Queues branded emails to customers and to the admin team, and the matching app notification (<see cref="Push.PushService"/>).
+/// Each email and each app notification can be switched off in Admin, separately; sending happens in the background
+/// (<see cref="EmailWorker"/>) and every email attempt is logged.
 /// </summary>
-public class EmailSender(EmailQueue queue, EmailSettingsService settings, IOptions<SmtpOptions> options)
+public class EmailSender(EmailQueue queue, EmailSettingsService settings, IOptions<SmtpOptions> options, Push.PushService push)
 {
     public string? StorefrontUrl => options.Value.StorefrontUrl?.TrimEnd('/');
     public string? AdminUrl => options.Value.AdminUrl?.TrimEnd('/');
@@ -39,12 +40,14 @@ public class EmailSender(EmailQueue queue, EmailSettingsService settings, IOptio
     public async Task CustomerAsync(EmailEvent ev, string? to, string subject, string heading, string bodyHtml,
         (string Text, string Url)? button = null, EmailAttachment? attachment = null, int? orderId = null)
     {
+        await push.CustomerAsync(ev, to, orderId, Push.PushService.FromEmail(ev, subject, bodyHtml, button?.Url ?? StorefrontUrl, orderId));
         if (string.IsNullOrWhiteSpace(to) || OrderService.IsPlaceholderEmail(to) || !await IsOnAsync(ev)) return;
         queue.Enqueue(new EmailMessage(ev, [to.Trim()], subject, EmailTemplates.Layout(heading, bodyHtml, button), attachment, orderId));
     }
 
     public async Task AdminsAsync(EmailEvent ev, string subject, string heading, string bodyHtml, (string Text, string Url)? button = null, int? orderId = null)
     {
+        await push.AdminsAsync(ev, Push.PushService.FromEmail(ev, subject, bodyHtml, button?.Url ?? AdminUrl + "/dashboard", orderId));
         var s = await settings.GetRuntimeAsync();
         if (s.AdminEmails.Count == 0 || !await IsOnAsync(ev)) return;
         queue.Enqueue(new EmailMessage(ev, s.AdminEmails, subject, EmailTemplates.Layout(heading, bodyHtml, button, admin: true), null, orderId));

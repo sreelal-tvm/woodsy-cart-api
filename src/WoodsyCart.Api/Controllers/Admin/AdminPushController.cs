@@ -7,7 +7,7 @@ namespace WoodsyCart.Api.Controllers.Admin;
 
 public record PushRemoveRequest(string? Endpoint, int? Id);
 
-/// <summary>Admin → Email &amp; notifications → Phone notifications: turn new-order notifications on or off per device.</summary>
+/// <summary>Admin → Email &amp; notifications → App notifications: devices and which notifications go out.</summary>
 [Route("api/admin/push")]
 public class AdminPushController(PushService push, IOptions<SmtpOptions> urls) : AdminControllerBase
 {
@@ -24,6 +24,27 @@ public class AdminPushController(PushService push, IOptions<SmtpOptions> urls) :
 
     [HttpPost("remove")]
     public async Task<IActionResult> Remove(PushRemoveRequest r) { await push.RemoveAsync(UserId, r.Endpoint, r.Id); return NoContent(); }
+
+    /// <summary>Which app notifications go out: to customers, to the team, and per event (Admin → App notifications).</summary>
+    [HttpGet("settings")]
+    public Task<PushSettingsDto> Settings() => push.SettingsAsync();
+
+    [HttpPut("settings")]
+    public async Task<PushSettingsDto> SaveSettings(PushSettingsUpdate r) { await push.SaveSettingsAsync(r); return await push.SettingsAsync(); }
+
+    /// <summary>Notifications written in Admin, and offers / new arrivals sent automatically (newest first).</summary>
+    [HttpGet("campaigns")]
+    public Task<List<PushCampaignDto>> Campaigns() => push.CampaignsAsync();
+
+    /// <summary>How many customer devices each audience reaches (only those that take offers and news).</summary>
+    [HttpGet("campaigns/audience")]
+    public Task<PushAudienceDto> Audience() => push.AudienceAsync();
+
+    [HttpPost("campaigns/test")]
+    public async Task<object> TestCampaign(PushCampaignRequest r) => new { devices = await push.TestCampaignAsync(UserId, r) };
+
+    [HttpPost("campaigns")]
+    public Task<PushCampaignDto> SendCampaign(PushCampaignRequest r) => push.SendCampaignAsync(r, UserName);
 
     [HttpPost("test")]
     public async Task<object> Test() => new { devices = await push.TestAsync(UserId, urls.Value.AdminUrl ?? "") };

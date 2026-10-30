@@ -54,6 +54,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<VisitStatsPause> VisitStatsPauses => Set<VisitStatsPause>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<PushConfig> PushConfigs => Set<PushConfig>();
+    public DbSet<PushCampaign> PushCampaigns => Set<PushCampaign>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
     {
@@ -143,9 +144,24 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.Auth).HasMaxLength(100);
             e.Property(x => x.Device).HasMaxLength(100);
             e.Property(x => x.LastError).HasMaxLength(500);
+            e.Property(x => x.Email).HasMaxLength(200);
+            e.HasIndex(x => x.Email);
+            e.HasIndex(x => x.OrderId);
+            e.Property(x => x.Promotions).HasDefaultValue(true);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
-        b.Entity<PushConfig>(e => { e.Property(x => x.PublicKey).HasMaxLength(200); e.Property(x => x.PrivateKeyProtected).HasMaxLength(2000); });
+        b.Entity<PushConfig>(e =>
+        {
+            e.Property(x => x.PublicKey).HasMaxLength(200); e.Property(x => x.PrivateKeyProtected).HasMaxLength(2000);
+            e.Property(x => x.EventsJson).HasMaxLength(4000);
+            e.Property(x => x.CustomersEnabled).HasDefaultValue(true); e.Property(x => x.TeamEnabled).HasDefaultValue(true);
+        });
+        b.Entity<PushCampaign>(e =>
+        {
+            e.Property(x => x.Kind).HasMaxLength(30); e.Property(x => x.Audience).HasMaxLength(30);
+            e.Property(x => x.Title).HasMaxLength(100); e.Property(x => x.Body).HasMaxLength(300);
+            e.Property(x => x.Url).HasMaxLength(500); e.Property(x => x.ImageUrl).HasMaxLength(500); e.Property(x => x.CreatedBy).HasMaxLength(100);
+        });
 
         b.Entity<Product>(e =>
         {
@@ -229,6 +245,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.HasIndex(x => new { x.UserId, x.ProductId }).IsUnique();
             e.HasOne(x => x.Product).WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.SeenAvailable).HasDefaultValue(true);
         });
         b.Entity<Enquiry>(e =>
         {
