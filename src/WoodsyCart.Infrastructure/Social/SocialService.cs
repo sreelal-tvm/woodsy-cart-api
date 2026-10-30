@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SkiaSharp;
@@ -21,14 +22,18 @@ public record SocialSettingsDto(
     bool ThreadsConnected, string? ThreadsAppId, string? ThreadsUsername, DateTime? ThreadsConnectedAt, DateTime? ThreadsTokenExpiresAt,
     bool ThreadsEnabled, string ThreadsTemplate, bool ThreadsCustomTemplate, string ThreadsDefaultTemplate, string? ThreadsTopic, string? ThreadsCallbackUrl,
     bool ReelsEnabled, string ReelTimes, bool ReelMusic, bool ReelsAvailable, List<SocialMusicTrack> MusicTracks,
-    bool StoriesEnabled, string StoryTimes, bool ReadComments, bool ReadStats);
+    bool StoriesEnabled, string StoryTimes, bool ReadComments, bool ReadStats,
+    bool YouTubeConnected = false, string? YouTubeClientId = null, string? YouTubeChannel = null, string? YouTubeHandle = null, DateTime? YouTubeConnectedAt = null,
+    bool YouTubeEnabled = true, string YouTubeTimes = "17:00", string? YouTubeCallbackUrl = null, int YouTubeDailyLimit = SocialService.YouTubeDailyLimit);
 public record SocialMusicTrack(string Name, long Size);
 public record SocialSettingsUpdate(bool InstagramEnabled, bool FacebookEnabled, string? Template, bool IncludePrice, bool ShowMrp,
     string? WhatsApp, string? City, string? Hashtags, int MaxHashtags, string PostTimes, bool AutoQueueNewProducts,
     bool ThreadsEnabled = true, string? ThreadsTemplate = null, string? ThreadsTopic = "Furniture",
     bool ReelsEnabled = false, string? ReelTimes = "18:00", bool ReelMusic = true,
-    bool StoriesEnabled = false, string? StoryTimes = "19:00", bool ReadComments = false, bool ReadStats = false);
+    bool StoriesEnabled = false, string? StoryTimes = "19:00", bool ReadComments = false, bool ReadStats = false,
+    bool YouTubeEnabled = true, string? YouTubeTimes = "17:00");
 public record ThreadsConnectRequest(string AppId, string AppSecret);
+public record YouTubeConnectRequest(string ClientId, string? ClientSecret);
 public record SocialConnectRequest(string AppId, string AppSecret, string UserToken, string? PageId);
 public record SocialPageChoice(string Id, string Name, string? Instagram);
 public record SocialConnectResult(bool Connected, List<SocialPageChoice>? Pages, string? Message);
@@ -37,7 +42,7 @@ public record SocialQueueResult(int Products, int PostingNow, int Scheduled, int
 public record SocialPlatformState(SocialPlatform Platform, bool Enabled, int? PostId, SocialPostStatus? Status, DateTime? ScheduledAt,
     DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, string? PostedCaption, bool CustomCaption, SocialStats? Stats = null);
 public record SocialProductDto(int ProductId, string Caption, string Code, List<string> Photos, bool Connected, bool Publishable, List<SocialPlatformState> Platforms,
-    string ThreadsCaption);
+    string ThreadsCaption, string? YouTubeTitle = null, string? YouTubeCaption = null);
 public record SocialPostRow(int Id, int ProductId, string ProductName, string? Image, SocialPlatform Platform, SocialPostStatus Status,
     DateTime? ScheduledAt, DateTime? PublishedAt, string? Permalink, string? LastError, List<string> Changes, bool CustomCaption, SocialStats? Stats = null);
 /// <summary>A live post's numbers (null = not given by that platform), and when they were read.</summary>
@@ -56,8 +61,8 @@ public record SocialQuota(SocialPlatform Platform, int Used, int Limit, bool Fro
 /// Social media). Facebook posts follow product changes automatically; Instagram and Threads can't edit posts through the
 /// API, so a changed product is marked "out of date" for the admin to copy the new caption or replace the post.
 /// </summary>
-public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threads, ReelMaker reels, IDataProtectionProvider dp, FileStorage storage, IMemoryCache cache,
-    IOptions<SmtpOptions> urls, EmailSender email, ILogger<SocialService> logger)
+public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threads, YouTubeClient youtube, ReelMaker reels, IDataProtectionProvider dp, FileStorage storage,
+    IMemoryCache cache, IOptions<SmtpOptions> urls, EmailSender email, IConfiguration config, ILogger<SocialService> logger)
 {
     public const int PhotoWidth = 1080, PhotoHeight = 1350;     // 4:5 portrait: the most screen space in the feed
     private readonly IDataProtector _protector = dp.CreateProtector("WoodsyCart.SocialSecrets.v1");
@@ -70,14 +75,17 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     private static bool IsReel(SocialPlatform p) => Reels.Contains(p);
     internal static readonly SocialPlatform[] Stories = [SocialPlatform.InstagramStory, SocialPlatform.FacebookStory];
     internal static bool IsStory(SocialPlatform p) => Stories.Contains(p);
+    internal static bool IsYouTube(SocialPlatform p) => p == SocialPlatform.YouTubeShort;
     private const int StoryGapDays = 7;     // automatic stories don't show the same product again within a week
+    /// <summary>At most this many Shorts in 24 hours: YouTube treats many near-identical uploads as spam.</summary>
+    public const int YouTubeDailyLimit = 2;
 
-    /// <summary>Photo posts, reels and stories each go out at their own times (Settings).</summary>
-    private enum Slot { Photo, Reel, Story }
-    private static Slot SlotOf(SocialPlatform p) => IsStory(p) ? Slot.Story : IsReel(p) ? Slot.Reel : Slot.Photo;
+    /// <summary>Photo posts, reels, stories and YouTube Shorts each go out at their own times (Settings).</summary>
+    private enum Slot { Photo, Reel, Story, Short }
+    private static Slot SlotOf(SocialPlatform p) => IsYouTube(p) ? Slot.Short : IsStory(p) ? Slot.Story : IsReel(p) ? Slot.Reel : Slot.Photo;
     private static SocialPlatform[] PlatformsOf(Slot k) => k switch
     {
-        Slot.Story => Stories, Slot.Reel => Reels,
+        Slot.Story => Stories, Slot.Reel => Reels, Slot.Short => [SocialPlatform.YouTubeShort],
         _ => [SocialPlatform.Instagram, SocialPlatform.Facebook, SocialPlatform.Threads]
     };
 
@@ -113,7 +121,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
             c.ThreadsTemplate ?? SocialCaption.DefaultThreadsTemplate, c.ThreadsTemplate is not null, SocialCaption.DefaultThreadsTemplate,
             c.ThreadsTopic, ThreadsCallback(),
             c.ReelsEnabled, c.ReelTimes, c.ReelMusic, reels.Available, Music(),
-            c.StoriesEnabled, c.StoryTimes, c.ReadComments, c.ReadStats);
+            c.StoriesEnabled, c.StoryTimes, c.ReadComments, c.ReadStats,
+            YouTubeConnected(c), c.YouTubeClientId, c.YouTubeChannelTitle, c.YouTubeHandle, c.YouTubeConnectedAt, c.YouTubeEnabled, c.YouTubeTimes, YouTubeCallback());
     }
 
     public async Task SaveSettingsAsync(SocialSettingsUpdate r)
@@ -133,6 +142,9 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (r.ReelsEnabled && reelTimes.Count == 0) throw new AppException("Enter at least one reel time, e.g. 18:00.");
         var storyTimes = ParseTimes(r.StoryTimes);
         if (r.StoriesEnabled && storyTimes.Count == 0) throw new AppException("Enter at least one story time, e.g. 19:00.");
+        var shortTimes = ParseTimes(r.YouTubeTimes);
+        if (r.YouTubeEnabled && shortTimes.Count == 0) throw new AppException("Enter a YouTube Shorts time, e.g. 17:00.");
+        if (shortTimes.Count > YouTubeDailyLimit) throw new AppException($"YouTube: at most {YouTubeDailyLimit} Shorts a day, so enter one or two times.");
         var c = await ConfigAsync();
         if (r.AutoQueueNewProducts && !c.AutoQueueNewProducts) c.AutoQueueSince = DateTime.UtcNow;
         c.InstagramEnabled = r.InstagramEnabled; c.FacebookEnabled = r.FacebookEnabled; c.Template = template;
@@ -149,6 +161,8 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         c.StoriesEnabled = r.StoriesEnabled;
         if (storyTimes.Count > 0) c.StoryTimes = string.Join(",", storyTimes.Select(t => t.ToString(@"hh\:mm")));
         c.ReadComments = r.ReadComments; c.ReadStats = r.ReadStats;
+        c.YouTubeEnabled = r.YouTubeEnabled;
+        if (shortTimes.Count > 0) c.YouTubeTimes = string.Join(",", shortTimes.Select(t => t.ToString(@"hh\:mm")));
         await db.SaveChangesAsync();
     }
 
@@ -253,13 +267,107 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         }
     }
 
+    /// <summary>Step 1 of connecting YouTube: remembers the client ID and secret for 15 minutes (in memory) and returns Google's
+    /// login address. Google sends the browser back to <see cref="YouTubeCallbackAsync"/>. Connecting again may leave the
+    /// secret empty to keep the saved one.</summary>
+    public async Task<string> StartYouTubeAsync(YouTubeConnectRequest r)
+    {
+        var c = await ConfigAsync();
+        var clientId = r.ClientId?.Trim();
+        var secret = string.IsNullOrWhiteSpace(r.ClientSecret) && clientId == c.YouTubeClientId ? YouTubeSecret(c) : r.ClientSecret?.Trim();
+        if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(secret))
+            throw new AppException("Enter the OAuth client ID and client secret from Google Cloud Console (APIs & Services → Credentials).");
+        if (!clientId.EndsWith(".apps.googleusercontent.com")) throw new AppException("That isn't an OAuth client ID: it ends in .apps.googleusercontent.com.");
+        var callback = YouTubeCallback() ?? throw new AppException("YouTube needs the API's address (Smtp:ApiUrl).");
+        var state = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+        cache.Set(YouTubeStateKey + state, (clientId, secret), TimeSpan.FromMinutes(15));
+        return YouTubeClient.AuthorizeUrl(clientId, callback, state);
+    }
+
+    /// <summary>Step 2: Google's redirect. Swaps the code for a lasting refresh token and returns where to send the browser in Admin.</summary>
+    public async Task<string> YouTubeCallbackAsync(string? code, string? state, string? error)
+    {
+        string Back(string query) => $"{email.AdminUrl}/social?tab=settings&{query}";
+        if (!string.IsNullOrEmpty(error)) return Back("youtube=cancelled");
+        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state) || !cache.TryGetValue(YouTubeStateKey + state, out (string ClientId, string Secret) app))
+            return Back("youtube=expired");
+        cache.Remove(YouTubeStateKey + state);
+        try
+        {
+            var (refresh, channel) = await youtube.ConnectAsync(app.ClientId, app.Secret, YouTubeCallback()!, code);
+            var c = await ConfigAsync();
+            c.YouTubeClientId = app.ClientId; c.YouTubeClientSecretProtected = _protector.Protect(app.Secret);
+            c.YouTubeRefreshTokenProtected = _protector.Protect(refresh);
+            c.YouTubeChannelId = channel.Id; c.YouTubeChannelTitle = channel.Title; c.YouTubeHandle = channel.Handle; c.YouTubeConnectedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            cache.Remove(YouTubeAccessKey);
+            return Back("youtube=connected");
+        }
+        catch (Exception ex) when (ex is MetaException or HttpRequestException)
+        {
+            logger.LogWarning("Connecting YouTube failed: {Message}", ex.Message);
+            return Back("youtube=failed&reason=" + Uri.EscapeDataString(ex.Message));
+        }
+    }
+
+    public async Task DisconnectYouTubeAsync()
+    {
+        var c = await ConfigAsync();
+        c.YouTubeRefreshTokenProtected = null; c.YouTubeConnectedAt = null;
+        await db.SaveChangesAsync();
+        cache.Remove(YouTubeAccessKey);
+    }
+
+    /// <summary>An access token for the channel (Google's last an hour; kept in memory until shortly before then).</summary>
+    private async Task<string> YouTubeAccessAsync(SocialConfig c, CancellationToken ct = default)
+    {
+        if (cache.TryGetValue(YouTubeAccessKey, out string? token) && token is not null) return token;
+        string secret, refresh;
+        try { secret = _protector.Unprotect(c.YouTubeClientSecretProtected!); refresh = _protector.Unprotect(c.YouTubeRefreshTokenProtected!); }
+        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ArgumentNullException)
+        {
+            throw new MetaException("The saved YouTube access can't be read on this server. Connect YouTube again.", 190);
+        }
+        var (t, expires) = await youtube.AccessTokenAsync(c.YouTubeClientId!, secret, refresh, ct);
+        cache.Set(YouTubeAccessKey, t, new DateTimeOffset(expires));
+        return t;
+    }
+
+    private string? YouTubeSecret(SocialConfig c)
+    {
+        if (c.YouTubeClientSecretProtected is null) return null;
+        try { return _protector.Unprotect(c.YouTubeClientSecretProtected); } catch (System.Security.Cryptography.CryptographicException) { return null; }
+    }
+
+    /// <summary>The title, description and tags the product's Short should have now.</summary>
+    private async Task<YouTubeVideo> YouTubeVideoAsync(Product p, SocialConfig c, PostContent content, BusinessSettings? biz = null)
+    {
+        biz ??= await db.BusinessSettings.AsNoTracking().FirstAsync();
+        return new YouTubeVideo(SocialCaption.YouTubeTitle(p, c, biz), content.Caption, SocialCaption.YouTubeTags(p, c, biz));
+    }
+
+    /// <summary>Public, unless Social:YouTubePrivacy says "private" or "unlisted" (test uploads from a dev machine).</summary>
+    private string YouTubePrivacy => config["Social:YouTubePrivacy"] is "private" or "unlisted" ? config["Social:YouTubePrivacy"]! : "public";
+
+    private const string YouTubeStateKey = "social:youtube-state:", YouTubeAccessKey = "social:youtube-access";
+    /// <summary>Google allows http only for localhost, so a dev machine can connect too.</summary>
+    private string? YouTubeCallback()
+    {
+        var api = urls.Value.ApiUrl?.TrimEnd('/');
+        return api is not null && (api.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || api.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase))
+            ? api + "/api/social/youtube/callback" : null;
+    }
+
     private const string ThreadsStateKey = "social:threads-state:";
     private string? ThreadsCallback() => PublicBase() is { } b ? b + "/api/social/threads/callback" : null;
 
     /// <summary>Facebook Page (and Instagram) connected.</summary>
     internal static bool IsConnected(SocialConfig c) => c.PageTokenProtected is not null && c.PageId is not null;
     internal static bool ThreadsConnected(SocialConfig c) => c.ThreadsTokenProtected is not null && c.ThreadsUserId is not null;
-    private static bool AnyConnected(SocialConfig c) => IsConnected(c) || ThreadsConnected(c);
+    internal static bool YouTubeConnected(SocialConfig c) => c.YouTubeRefreshTokenProtected is not null && c.YouTubeClientId is not null;
+    private static bool AnyConnected(SocialConfig c) => IsConnected(c) || ThreadsConnected(c) || YouTubeConnected(c);
+    /// <summary>The account this kind of post goes to is connected.</summary>
+    private static bool ConnectedFor(SocialConfig c, SocialPlatform p) => IsYouTube(p) ? YouTubeConnected(c) : IsThreads(p) ? ThreadsConnected(c) : IsConnected(c);
     internal string Token(SocialConfig c) => _protector.Unprotect(c.PageTokenProtected!);
     internal string Protect(string secret) => _protector.Protect(secret);
     internal string? AiKey(SocialConfig c)
@@ -282,6 +390,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         // Stories likewise: by hand any time; Settings → Stories adds automatic ones
         if (list.Contains(SocialPlatform.Instagram)) list.Add(SocialPlatform.InstagramStory);
         if (list.Contains(SocialPlatform.Facebook)) list.Add(SocialPlatform.FacebookStory);
+        if (c.YouTubeEnabled && YouTubeConnected(c)) list.Add(SocialPlatform.YouTubeShort);
         return list;
     }
 
@@ -300,11 +409,11 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     private async Task<PostContent> ContentAsync(Product p, SocialConfig c, string? overrideCaption, SocialPlatform platform, BusinessSettings? biz = null,
         bool tagWords = true, bool tagLinks = true) =>
         SocialCaption.Build(p, c, biz ?? await db.BusinessSettings.AsNoTracking().FirstAsync(), overrideCaption, Photos(p),
-            IsThreads(platform), email.StorefrontUrl, tagWords, tagLinks ? LinkSource(platform) : null);
+            IsThreads(platform), email.StorefrontUrl, tagWords, tagLinks ? LinkSource(platform) : null, IsYouTube(platform));
 
     /// <summary>utm_source for links in posts (matches the storefront's visitor sources).</summary>
-    private static string LinkSource(SocialPlatform p) =>
-        IsThreads(p) ? VisitSources.Threads : InstagramKinds.Contains(p) ? VisitSources.Instagram : VisitSources.Facebook;
+    private static string LinkSource(SocialPlatform p) => IsYouTube(p) ? VisitSources.YouTube
+        : IsThreads(p) ? VisitSources.Threads : InstagramKinds.Contains(p) ? VisitSources.Instagram : VisitSources.Facebook;
 
     public async Task<SocialProductDto> ProductAsync(int productId)
     {
@@ -322,18 +431,21 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         foreach (var reel in Reels)
             if ((reel == SocialPlatform.ThreadsVideo ? ThreadsConnected(c) : IsConnected(c)) || posts.Any(x => x.Platform == reel)) shown.Add(reel);
         foreach (var story in Stories) if (IsConnected(c) || posts.Any(x => x.Platform == story)) shown.Add(story);
+        var youtubePlain = await ContentAsync(p, c, null, SocialPlatform.YouTubeShort, biz);
+        if (YouTubeConnected(c) || posts.Any(x => x.Platform == SocialPlatform.YouTubeShort)) shown.Add(SocialPlatform.YouTubeShort);
         var platforms = shown.Select(pl =>
         {
             var s = posts.FirstOrDefault(x => x.Platform == pl);
-            var basic = IsThreads(pl) ? threadsPlain : plain;
+            var basic = IsYouTube(pl) ? youtubePlain : IsThreads(pl) ? threadsPlain : plain;
             var now = s?.CaptionOverride is null ? basic
-                : SocialCaption.Build(p, c, biz, s.CaptionOverride, plain.Photos, IsThreads(pl), email.StorefrontUrl);
+                : SocialCaption.Build(p, c, biz, s.CaptionOverride, plain.Photos, IsThreads(pl), email.StorefrontUrl, youtube: IsYouTube(pl));
             var changes = s is { Status: SocialPostStatus.OutOfDate } ? SocialCaption.Changes(s.PostedSnapshot, now.Snapshot) : [];
             return new SocialPlatformState(pl, enabled.Contains(pl), s?.Id, s?.Status, s?.ScheduledAt, s?.PublishedAt, s?.Permalink, s?.LastError,
                 changes, s?.PostedCaption, s?.CaptionOverride is not null, SocialStats.Of(s));
         }).ToList();
         return new SocialProductDto(p.Id, plain.Caption, SocialCaption.Code(p.Id), plain.Photos, AnyConnected(c),
-            p.IsActive && plain.Photos.Count > 0, platforms, threadsPlain.Caption);
+            p.IsActive && plain.Photos.Count > 0, platforms, threadsPlain.Caption,
+            SocialCaption.YouTubeTitle(p, c, biz), youtubePlain.Caption);
     }
 
     /// <summary>Makes (or returns) the product's reel video: for downloading and posting by hand with a trending song
@@ -428,10 +540,10 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     public async Task<SocialQueueResult> QueueAsync(SocialQueueRequest r)
     {
         var c = await ConfigAsync();
-        if (!AnyConnected(c)) throw new AppException("Connect Instagram and Facebook, or Threads, first (Social media → Settings).");
+        if (!AnyConnected(c)) throw new AppException("Connect Instagram and Facebook, Threads or YouTube first (Social media → Settings).");
         // Bulk and automatic posting add reels only when switched on; stories have their own automatic picker
         var platforms = Enabled(c).Where(p => r.Platforms is null ? (!IsReel(p) || c.ReelsEnabled) && !IsStory(p) : r.Platforms.Contains(p)).ToList();
-        if (platforms.Count == 0) throw new AppException("Switch on Instagram, Facebook or Threads in Social media settings.");
+        if (platforms.Count == 0) throw new AppException("Switch on Instagram, Facebook, Threads or YouTube in Social media settings.");
 
         var ids = r.ProductIds.Distinct().ToList();
         var products = await db.Products.AsNoTracking().Where(p => ids.Contains(p.Id))
@@ -566,7 +678,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         var taken = (await db.SocialPosts.Where(s => s.Status == SocialPostStatus.Queued && s.ScheduledAt > now && kinds.Contains(s.Platform))
                 .Select(s => s.ScheduledAt!.Value).ToListAsync())
             .Select(d => new DateTime(d.Year, d.Month, d.Day, d.Hour, d.Minute, 0, DateTimeKind.Utc)).ToHashSet();
-        var times = ParseTimes(kind switch { Slot.Reel => c.ReelTimes, Slot.Story => c.StoryTimes, _ => c.PostTimes });
+        var times = ParseTimes(kind switch { Slot.Reel => c.ReelTimes, Slot.Story => c.StoryTimes, Slot.Short => c.YouTubeTimes, _ => c.PostTimes });
         if (times.Count == 0) times = [new TimeSpan(11, 0, 0)];
         var today = TimeZoneInfo.ConvertTimeFromUtc(now, India).Date;
         for (var day = 0; result.Count < count && day < 3660; day++)
@@ -596,9 +708,13 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (s.ExternalId is not null)
         {
             var c = await ConfigAsync();
-            if (!(IsThreads(s.Platform) ? ThreadsConnected(c) : IsConnected(c))) throw new AppException($"Connect {s.Platform} in Settings first.");
+            if (!ConnectedFor(c, s.Platform)) throw new AppException($"Connect {s.Platform} in Settings first.");
             try { await DeleteExternalAsync(s, c); }
             catch (MetaException ex) when (ex.Code is 100) { }   // already deleted in the app
+            catch (MetaException ex) when (ex.Code is 10 or 200 && s.Platform is SocialPlatform.YouTubeShort)
+            {
+                throw new AppException("YouTube refused to delete the Short (missing permission). Connect YouTube again in Settings, then try again.");
+            }
             catch (MetaException ex) when (ex.Code is 10 or 200 && s.Platform is SocialPlatform.Instagram or SocialPlatform.Threads or SocialPlatform.ThreadsVideo)
             {
                 throw new AppException(s.Platform == SocialPlatform.Instagram
@@ -634,7 +750,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         if (IsThreads(s.Platform) && s.CaptionOverride is not null && SocialCaption.ThreadsLength(s.CaptionOverride) > SocialCaption.ThreadsMaxLength)
             throw new AppException($"Threads allows {SocialCaption.ThreadsMaxLength} characters (emojis and ₹ count as 3–4). Shorten the text.");
         await db.SaveChangesAsync();
-        if (s.Platform == SocialPlatform.Facebook && Live.Contains(s.Status)) await RefreshAsync([s.ProductId]);
+        if (s.Platform is SocialPlatform.Facebook or SocialPlatform.YouTubeShort && Live.Contains(s.Status)) await RefreshAsync([s.ProductId]);
     }
 
     /// <summary>After pasting the new caption into the Instagram app: the post counts as up to date again.</summary>
@@ -717,7 +833,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         {
             // Names only for connections that work now (a disconnected Page keeps its name in the settings)
             connected = AnyConnected(c), instagram = IsConnected(c) ? c.InstagramUsername : null, page = IsConnected(c) ? c.PageName : null,
-            threads = ThreadsConnected(c) ? c.ThreadsUsername : null,
+            threads = ThreadsConnected(c) ? c.ThreadsUsername : null, youtube = YouTubeConnected(c) ? c.YouTubeChannelTitle : null,
             enabled = Enabled(c), quota = await QuotaAsync(c), threadsQuota = ThreadsConnected(c) ? await ThreadsQuotaAsync(c) : null,
             facebookLast24h = fb24, nextPostAt = next,
             unreadComments = await db.SocialComments.CountAsync(x => x.ParentId == null && x.ReadAt == null),
@@ -765,7 +881,7 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
     private const int CatchUpMinutes = 10;
 
     /// <summary>The account a post goes to: Instagram (posts, reels, stories), the Facebook Page, or Threads.</summary>
-    private static string Account(SocialPlatform p) => IsThreads(p) ? "Threads" : InstagramKinds.Contains(p) ? "Instagram" : "Facebook";
+    private static string Account(SocialPlatform p) => IsYouTube(p) ? "YouTube" : IsThreads(p) ? "Threads" : InstagramKinds.Contains(p) ? "Instagram" : "Facebook";
 
     private async Task PublishAsync(SocialPost s, SocialConfig c, CancellationToken ct)
     {
@@ -787,6 +903,14 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         {
             s.ScheduledAt = (await FreeSlotsAsync(c, 1, Slot.Reel))[0];
             s.LastError = "Facebook's limit of 30 reels in 24 hours was reached; moved to the next reel time.";
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+        if (IsYouTube(s.Platform)
+            && await db.SocialPosts.CountAsync(x => x.Platform == SocialPlatform.YouTubeShort && x.PublishedAt >= DateTime.UtcNow.AddHours(-24), ct) >= YouTubeDailyLimit)
+        {
+            s.ScheduledAt = (await FreeSlotsAsync(c, 1, Slot.Short))[0];
+            s.LastError = $"{YouTubeDailyLimit} Shorts were posted in the last 24 hours (kept low so YouTube doesn't see spam); moved to the next Shorts time.";
             await db.SaveChangesAsync(ct);
             return;
         }
@@ -820,14 +944,22 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
 
         var content = await ContentAsync(p, c, s.CaptionOverride, s.Platform);
         if (content.Photos.Count == 0) { await FailAsync(s, "The product has no photos.", ct); return; }
-        if (PublicBase() is not { } baseUrl) { await FailAsync(s, "Photos need a public address: set Smtp:ApiUrl (e.g. https://api.woodsycart.com).", ct); return; }
+        // YouTube takes the video file itself, so it doesn't need public addresses
+        var baseUrl = PublicBase() ?? "";
+        if (!IsYouTube(s.Platform) && baseUrl.Length == 0) { await FailAsync(s, "Photos need a public address: set Smtp:ApiUrl (e.g. https://api.woodsycart.com).", ct); return; }
 
         s.Status = SocialPostStatus.Publishing; s.Attempts++;
         await db.SaveChangesAsync(ct);
         try
         {
             PublishResult result;
-            if (IsStory(s.Platform))
+            if (IsYouTube(s.Platform))
+            {
+                var biz = await db.BusinessSettings.AsNoTracking().FirstAsync(ct);
+                var reel = await reels.MakeAsync(p.Id, SocialCaption.Reel(p, c, biz), content.Photos, c.ReelMusic, ct);
+                result = await youtube.UploadAsync(await YouTubeAccessAsync(c, ct), storage.FullPath(reel.Video), await YouTubeVideoAsync(p, c, content, biz), YouTubePrivacy, ct);
+            }
+            else if (IsStory(s.Platform))
             {
                 var biz = await db.BusinessSettings.AsNoTracking().FirstAsync(ct);
                 var url = baseUrl + reels.MakeStory(p.Id, SocialCaption.Reel(p, c, biz), content.Photos[0]);
@@ -874,7 +1006,13 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
         catch (Exception ex) when (ex is MetaException or HttpRequestException or IOException or AppException)
         {
             await FailAsync(s, ex.Message, ct);
-            if (ex is MetaException { TokenInvalid: true })
+            if (ex is MetaException { TokenInvalid: true } && IsYouTube(s.Platform))
+            {
+                cache.Remove(YouTubeAccessKey);
+                await NotifyAsync("YouTube is disconnected",
+                    "<p>Google no longer accepts WoodsyCart's access to the YouTube channel (access was removed, the password changed, or the Google Cloud app is still in Testing, which ends access after 7 days). YouTube Shorts are failing.</p><p>Connect YouTube again in Admin → Social media → Settings.</p>");
+            }
+            else if (ex is MetaException { TokenInvalid: true })
                 await NotifyAsync(IsThreads(s.Platform) ? "Threads is disconnected" : "Instagram and Facebook are disconnected",
                     IsThreads(s.Platform)
                         ? "<p>Threads no longer accepts WoodsyCart's access (the token expired or was removed). Threads posts are failing.</p><p>Connect Threads again in Admin → Social media → Settings.</p>"
@@ -905,11 +1043,36 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
                 || (await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz, tagLinks: false)).Hash == s.ContentHash
                 || (await ContentAsync(p, c, s.CaptionOverride, s.Platform, biz, tagWords: false, tagLinks: false)).Hash == s.ContentHash)
             {
-                if (s.Status == SocialPostStatus.OutOfDate) { s.Status = SocialPostStatus.Published; changed++; }
+                // A YouTube Short's text is already current; it stays out of date until the video is replaced
+                if (s.Status == SocialPostStatus.OutOfDate && !IsYouTube(s.Platform)) { s.Status = SocialPostStatus.Published; changed++; }
                 continue;
             }
             var before = string.IsNullOrEmpty(s.PostedSnapshot) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(s.PostedSnapshot);
             var samePhotos = before?.GetValueOrDefault("Photos") == content.Snapshot["Photos"];
+            if (IsYouTube(s.Platform) && s.ExternalId is not null && YouTubeConnected(c))
+            {
+                // The title and description follow the product. The video shows the name, price and details itself, so the
+                // Short is out of date (replace it) when one of those changed, but not for the description alone.
+                try
+                {
+                    await youtube.UpdateAsync(await YouTubeAccessAsync(c, ct), s.ExternalId, await YouTubeVideoAsync(p, c, content, biz), ct);
+                    var videoChanged = SocialCaption.Changes(s.PostedSnapshot, content.Snapshot).Any(k => k is not ("Caption" or "Description"));
+                    var wasOutdated = s.Status == SocialPostStatus.OutOfDate;
+                    s.LastError = null;
+                    if (videoChanged || wasOutdated)
+                    {
+                        // Keep what the video shows, so "Changed: …" still lists it until the Short is replaced
+                        s.PostedCaption = content.Caption;
+                        s.PostedSnapshot = JsonSerializer.Serialize(content.Snapshot.ToDictionary(kv => kv.Key,
+                            kv => kv.Key is "Caption" or "Description" ? kv.Value : before?.GetValueOrDefault(kv.Key) ?? kv.Value));
+                        s.ContentHash = content.Hash;
+                        if (!wasOutdated) { s.Status = SocialPostStatus.OutOfDate; changed++; }
+                    }
+                    else { Apply(s, content); s.Status = SocialPostStatus.Published; changed++; }
+                    continue;
+                }
+                catch (Exception ex) when (ex is MetaException or HttpRequestException) { s.LastError = "Couldn't update the YouTube Short: " + ex.Message; }
+            }
             if (s.Platform == SocialPlatform.Facebook && samePhotos && s.ExternalId is not null && IsConnected(c))
             {
                 try
@@ -973,9 +1136,12 @@ public class SocialService(AppDbContext db, MetaClient meta, ThreadsClient threa
 
     // ---------- Helpers ----------
 
-    private Task DeleteExternalAsync(SocialPost s, SocialConfig c) => IsThreads(s.Platform)
-        ? threads.DeleteAsync(s.ExternalId!, ThreadsToken(c))
-        : meta.DeleteAsync(s.ExternalId!, Token(c));
+    private async Task DeleteExternalAsync(SocialPost s, SocialConfig c)
+    {
+        if (IsYouTube(s.Platform)) await youtube.DeleteAsync(await YouTubeAccessAsync(c), s.ExternalId!);
+        else if (IsThreads(s.Platform)) await threads.DeleteAsync(s.ExternalId!, ThreadsToken(c));
+        else await meta.DeleteAsync(s.ExternalId!, Token(c));
+    }
 
     /// <summary>The old post's numbers and comments go with it.</summary>
     private static void ForgetEngagement(SocialPost s)

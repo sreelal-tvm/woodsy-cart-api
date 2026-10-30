@@ -23,6 +23,28 @@ public static partial class SocialCaption
     public const int MaxLength = 2200;   // Instagram's caption limit
     public const int MaxPhotos = 10;     // Instagram carousel limit
     public const int ThreadsMaxLength = 500;   // Threads' text limit, emojis counted by their UTF-8 bytes
+    public const int YouTubeTitleLength = 100, YouTubeMaxLength = 5000;   // YouTube's title and description limits
+
+    /// <summary>YouTube Shorts description. Links in Shorts descriptions can't be clicked, so the product page is also found by
+    /// name or code; the channel's own link (in its header) is the clickable one.</summary>
+    public const string DefaultYouTubeTemplate =
+        """
+        {name} | {category} in {city} 🛋️
+        {hook}
+
+        {price}
+        ✅ Colour: {colours}
+        📐 Size: {dimensions}
+        🪵 Material: {material}
+        🛡️ Warranty: {warranty}
+        🚚 Delivered in {delivery_days} days{assembly}
+
+        🛒 Order: {url}
+        🔎 Search "{search}" or code {code} at {website}
+        💬 WhatsApp: {whatsapp}
+
+        {hashtags}
+        """;
 
     public const string DefaultThreadsTemplate =
         """
@@ -70,10 +92,11 @@ public static partial class SocialCaption
     /// <param name="storeUrl">Storefront address for {url}, e.g. https://woodsycart.com</param>
     /// <param name="tagWords">The hashtags' words again in brackets under them, e.g. [FurnitureBangalore, HomeDecor] (from 29 Oct 2026;
     /// false = the format of earlier posts).</param>
+    /// <param name="youtube">YouTube Short description: its own template, #Shorts with the hashtags, no "&lt;" or "&gt;" (YouTube refuses them).</param>
     /// <param name="linkSource">Added to the {url} link as ?utm_source=…, so Admin → Visitors can tell where visitors came from
     /// (from 30 Oct 2026; null = the format of earlier posts).</param>
     public static PostContent Build(Product p, SocialConfig cfg, BusinessSettings biz, string? overrideCaption, List<string> photos,
-        bool threads = false, string? storeUrl = null, bool tagWords = true, string? linkSource = null)
+        bool threads = false, string? storeUrl = null, bool tagWords = true, string? linkSource = null, bool youtube = false)
     {
         var inr = CultureInfo.GetCultureInfo("en-IN");
         string Money(decimal v) => "₹" + v.ToString("#,##0", inr);
@@ -133,13 +156,14 @@ public static partial class SocialCaption
             ["search"] = p.Name.Trim().ToLowerInvariant(),
             ["code"] = Code(p.Id),
             ["whatsapp"] = Phone(cfg.WhatsApp ?? biz.WhatsApp),
-            ["hashtags"] = Hashtags(p, cfg, city, tagWords)
+            ["hashtags"] = youtube ? Hashtags(p, cfg, city, false, 14) + " #Shorts" : Hashtags(p, cfg, city, tagWords)
         };
 
         var caption = string.IsNullOrWhiteSpace(overrideCaption)
-            ? Render(threads ? cfg.ThreadsTemplate ?? DefaultThreadsTemplate : cfg.Template ?? DefaultTemplate, values)
+            ? Render(youtube ? DefaultYouTubeTemplate : threads ? cfg.ThreadsTemplate ?? DefaultThreadsTemplate : cfg.Template ?? DefaultTemplate, values)
             : overrideCaption.Trim();
         if (threads) caption = FitThreads(caption, url);
+        else if (youtube) caption = YouTubeSafe(caption, YouTubeMaxLength);
         else if (caption.Length > MaxLength) caption = caption[..(MaxLength - 1)].TrimEnd() + "…";
 
         var snapshot = new Dictionary<string, string>
@@ -153,6 +177,46 @@ public static partial class SocialCaption
     }
 
     public static string Code(int productId) => $"WC{productId}";
+
+    /// <summary>The Short's title, e.g. "Rio Staff Chair – ₹6,199 | WoodsyCart Bengaluru" (at most 100 characters).</summary>
+    public static string YouTubeTitle(Product p, SocialConfig cfg, BusinessSettings biz)
+    {
+        var r = Reel(p, cfg, biz);
+        var city = Clean(cfg.City) ?? Clean(biz.City) ?? "Bengaluru";
+        var tail = $" | WoodsyCart {city}";
+        var head = r.Price is null ? r.Name : $"{r.Name} – {r.Price}";
+        var title = YouTubeSafe(head, YouTubeTitleLength - tail.Length) + tail;
+        return title.Length <= YouTubeTitleLength ? title : YouTubeSafe(head, YouTubeTitleLength);
+    }
+
+    /// <summary>Search tags for the Short (YouTube allows 500 characters in all).</summary>
+    public static List<string> YouTubeTags(Product p, SocialConfig cfg, BusinessSettings biz)
+    {
+        var city = Clean(cfg.City) ?? Clean(biz.City) ?? "Bengaluru";
+        var category = p.Category?.Name.Trim();
+        var tags = new List<string> { "WoodsyCart", "furniture " + city, "furniture online" };
+        if (!string.IsNullOrEmpty(category)) { tags.Insert(1, category); tags.Insert(2, $"{category} {city}"); }
+        tags.AddRange((cfg.Hashtags ?? "").Split([' ', ',', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(t => t.TrimStart('#')));
+        tags.AddRange(p.Tags.Select(t => t.Name.Trim()));
+        var result = new List<string>();
+        var total = 0;
+        foreach (var t in tags.Select(t => t.Replace("<", "").Replace(">", "").Replace(",", " ").Trim()).Where(t => t.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (total + t.Length + 3 > 450) break;   // YouTube counts quotes around tags with spaces
+            result.Add(t); total += t.Length + 3;
+        }
+        return result;
+    }
+
+    /// <summary>Without "&lt;" and "&gt;" (YouTube refuses them) and cut to <paramref name="max"/> characters.</summary>
+    private static string YouTubeSafe(string s, int max)
+    {
+        s = s.Replace("<", "‹").Replace(">", "›").Trim();
+        if (s.Length <= max) return s;
+        s = s[..(max - 1)];
+        if (char.IsHighSurrogate(s[^1])) s = s[..^1];
+        return s.TrimEnd() + "…";
+    }
 
     /// <summary>The words on the reel's slides (short: they are read in a few seconds each).</summary>
     public static ReelScript Reel(Product p, SocialConfig cfg, BusinessSettings biz)
@@ -232,7 +296,7 @@ public static partial class SocialCaption
         return BlankRuns().Replace(text, "\n\n").Trim();
     }
 
-    private static string Hashtags(Product p, SocialConfig cfg, string city, bool tagWords)
+    private static string Hashtags(Product p, SocialConfig cfg, string city, bool tagWords, int most = 30)
     {
         var cityTag = city.Equals("Bengaluru", StringComparison.OrdinalIgnoreCase) ? "Bangalore" : Tag(city);
         var category = p.Category is null ? "" : Tag(p.Category.Name);
@@ -240,7 +304,7 @@ public static partial class SocialCaption
         if (category.Length > 0) { tags.Add(category); tags.Add(category + cityTag); }
         tags.AddRange((cfg.Hashtags ?? "").Split([' ', ',', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(Tag));
         tags.AddRange(p.Tags.Select(t => Tag(t.Name)));
-        var used = tags.Where(t => t.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).Take(Math.Clamp(cfg.MaxHashtags, 1, 30)).ToList();
+        var used = tags.Where(t => t.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).Take(Math.Clamp(cfg.MaxHashtags, 1, most)).ToList();
         var line = string.Join(" ", used.Select(t => "#" + t));
         return tagWords && used.Count > 0 ? $"{line}\n[{string.Join(", ", used)}]" : line;
     }

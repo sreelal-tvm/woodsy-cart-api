@@ -12,3 +12,12 @@ public class SocialCallbackController(SocialService social) : ApiControllerBase
     public async Task<IActionResult> Callback(string? code, string? state, string? error) =>
         Redirect(await social.ThreadsCallbackAsync(code, state, error));
 }
+
+/// <summary>YouTube (Google) login, step 2: the same, for the YouTube channel.</summary>
+[Route("api/social/youtube")]
+public class YouTubeCallbackController(SocialService social) : ApiControllerBase
+{
+    [HttpGet("callback")]
+    public async Task<IActionResult> Callback(string? code, string? state, string? error) =>
+        Redirect(await social.YouTubeCallbackAsync(code, state, error));
+}

@@ -76,7 +76,8 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
         var now = DateTime.UtcNow;
         var posts = await db.SocialPosts.Where(s => SocialService.Live.Contains(s.Status) && s.ExternalId != null && s.PublishedAt > now.AddDays(-MaxAgeDays))
             .ToListAsync(ct);
-        posts = posts.Where(s => SocialService.IsThreads(s.Platform) ? threadsOn : metaOn).ToList();
+        // YouTube Shorts: no comments or numbers read yet
+        posts = posts.Where(s => !SocialService.IsYouTube(s.Platform) && (SocialService.IsThreads(s.Platform) ? threadsOn : metaOn)).ToList();
         var issues = Issues(c);
         var needsPermission = new Dictionary<string, bool>();   // per account, from the numbers read this run
 
@@ -574,7 +575,7 @@ public class SocialEngagement(AppDbContext db, SocialService social, MetaClient 
     private static string PlatformName(SocialPlatform p) => p switch
     {
         SocialPlatform.InstagramReel => "Instagram Reel", SocialPlatform.FacebookReel => "Facebook Reel", SocialPlatform.ThreadsVideo => "Threads video",
-        SocialPlatform.InstagramStory => "Instagram Story", SocialPlatform.FacebookStory => "Facebook Story",
+        SocialPlatform.InstagramStory => "Instagram Story", SocialPlatform.FacebookStory => "Facebook Story", SocialPlatform.YouTubeShort => "YouTube Short",
         _ => p.ToString()
     };
 

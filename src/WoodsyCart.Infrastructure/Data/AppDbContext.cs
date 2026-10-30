@@ -89,6 +89,13 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.EngagementIssues).HasMaxLength(2000);
             e.Property(x => x.AiKeyProtected).HasMaxLength(2000);
             e.Property(x => x.AiModel).HasMaxLength(60);
+            e.Property(x => x.YouTubeClientId).HasMaxLength(200);
+            e.Property(x => x.YouTubeClientSecretProtected).HasMaxLength(2000);
+            e.Property(x => x.YouTubeRefreshTokenProtected).HasMaxLength(2000);
+            e.Property(x => x.YouTubeChannelId).HasMaxLength(100);
+            e.Property(x => x.YouTubeChannelTitle).HasMaxLength(200);
+            e.Property(x => x.YouTubeHandle).HasMaxLength(100);
+            e.Property(x => x.YouTubeTimes).HasMaxLength(200);
         });
         b.Entity<SocialPost>(e =>
         {

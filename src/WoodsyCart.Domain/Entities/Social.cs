@@ -30,6 +30,18 @@ public class SocialConfig : BaseEntity
     public string? ThreadsTemplate { get; set; }          // null = built-in short template (Threads allows 500 characters)
     public string? ThreadsTopic { get; set; } = "Furniture";   // Threads allows one topic tag per post
 
+    // YouTube Shorts: the product reel uploaded to the YouTube channel (Google login; the client secret and the refresh
+    // token are stored encrypted, since Google needs both to renew the hour-long access)
+    public string? YouTubeClientId { get; set; }
+    public string? YouTubeClientSecretProtected { get; set; }
+    public string? YouTubeRefreshTokenProtected { get; set; }
+    public string? YouTubeChannelId { get; set; }
+    public string? YouTubeChannelTitle { get; set; }
+    public string? YouTubeHandle { get; set; }
+    public DateTime? YouTubeConnectedAt { get; set; }
+    public bool YouTubeEnabled { get; set; } = true;
+    public string YouTubeTimes { get; set; } = "17:00";    // India time, one Short per time (at most 2 a day)
+
     // Reels: a short video made from the product's photos, posted to Instagram and the Facebook Page at their own times
     public bool ReelsEnabled { get; set; }
     public string ReelTimes { get; set; } = "18:00";       // India time, one reel per time

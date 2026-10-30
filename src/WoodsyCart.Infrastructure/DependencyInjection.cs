@@ -74,6 +74,8 @@ public static class DependencyInjection
         services.AddHttpClient("meta", c => c.Timeout = TimeSpan.FromSeconds(60));
         services.AddScoped<Social.MetaClient>();
         services.AddScoped<Social.ThreadsClient>();
+        services.AddHttpClient("youtube", c => c.Timeout = TimeSpan.FromMinutes(5));   // uploads take a while
+        services.AddScoped<Social.YouTubeClient>();
         services.AddScoped<Social.ReelMaker>();
         services.AddScoped<Social.CatalogFeed>();
         services.AddScoped<Social.SocialEngagement>();

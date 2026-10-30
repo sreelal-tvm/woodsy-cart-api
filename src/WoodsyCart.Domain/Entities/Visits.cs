@@ -23,8 +23,8 @@ public class Visit : BaseEntity
 public static class VisitSources
 {
     public const string Instagram = "instagram", Facebook = "facebook", Threads = "threads",
-        GoogleAds = "google-ads", Google = "google", Other = "other", Direct = "direct";
-    public static readonly string[] All = [Instagram, Facebook, Threads, GoogleAds, Google, Other, Direct];
+        YouTube = "youtube", GoogleAds = "google-ads", Google = "google", Other = "other", Direct = "direct";
+    public static readonly string[] All = [Instagram, Facebook, Threads, YouTube, GoogleAds, Google, Other, Direct];
 }
 
 /// <summary>One run of the API (from start until it stopped), so Admin can see restarts and downtime. CreatedAt is the start.</summary>

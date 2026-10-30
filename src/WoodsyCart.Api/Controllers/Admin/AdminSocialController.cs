@@ -34,6 +34,13 @@ public class AdminSocialController(SocialService social, CatalogFeed feed, Socia
     [HttpPost("threads/disconnect")]
     public async Task<IActionResult> DisconnectThreads() { await social.DisconnectThreadsAsync(); return NoContent(); }
 
+    /// <summary>YouTube login, step 1: the Google address to send the browser to (Google comes back to /api/social/youtube/callback).</summary>
+    [HttpPost("youtube/connect")]
+    public async Task<object> ConnectYouTube(YouTubeConnectRequest r) => new { url = await social.StartYouTubeAsync(r) };
+
+    [HttpPost("youtube/disconnect")]
+    public async Task<IActionResult> DisconnectYouTube() { await social.DisconnectYouTubeAsync(); return NoContent(); }
+
     /// <summary>Views, likes, comments and shares per platform for posts of the last <paramref name="days"/> days, and the best posts.</summary>
     [HttpGet("performance")]
     public Task<SocialPerformance> Performance(int days = 30) => engagement.PerformanceAsync(days);
