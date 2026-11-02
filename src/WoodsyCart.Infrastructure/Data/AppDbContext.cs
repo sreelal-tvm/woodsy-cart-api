@@ -24,6 +24,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<CartItem> CartItems => Set<CartItem>();
     public DbSet<WishlistItem> WishlistItems => Set<WishlistItem>();
     public DbSet<Enquiry> Enquiries => Set<Enquiry>();
+    public DbSet<StockAlert> StockAlerts => Set<StockAlert>();
     public DbSet<ServiceablePincode> ServiceablePincodes => Set<ServiceablePincode>();
 
     public DbSet<Order> Orders => Set<Order>();
@@ -180,6 +181,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasOne(x => x.Offer).WithMany().HasForeignKey(x => x.OfferId).OnDelete(DeleteBehavior.NoAction);
             e.HasIndex(x => x.OfferId);
         });
+        b.Entity<PushSubscription>().Property(x => x.CartProductIds).HasMaxLength(400);
         b.Entity<Offer>(e =>
         {
             e.HasIndex(x => x.Slug).IsUnique();
@@ -191,6 +193,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasMany(x => x.Products).WithMany().UsingEntity<Dictionary<string, object>>("OfferProducts",
                 r => r.HasOne<Product>().WithMany().HasForeignKey("ProductId").OnDelete(DeleteBehavior.Cascade),
                 l => l.HasOne<Offer>().WithMany().HasForeignKey("OfferId").OnDelete(DeleteBehavior.Cascade));
+            e.HasMany(x => x.ExcludedProducts).WithMany().UsingEntity<Dictionary<string, object>>("OfferExcludedProducts",
+                r => r.HasOne<Product>().WithMany().HasForeignKey("ProductId").OnDelete(DeleteBehavior.Cascade),
+                l => l.HasOne<Offer>().WithMany().HasForeignKey("OfferId").OnDelete(DeleteBehavior.Cascade));
+            e.Property(x => x.RepeatDays).HasMaxLength(100);
+            e.Property(x => x.RepeatWeeks).HasMaxLength(20);
         });
         b.Entity<ProductImage>(e =>
         {
@@ -251,6 +258,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.Property(x => x.Message).HasMaxLength(4000);
             e.HasOne(x => x.Product).WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.SetNull);
+        });
+        b.Entity<StockAlert>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(150);
+            e.Property(x => x.Email).HasMaxLength(256);
+            e.Property(x => x.Phone).HasMaxLength(20);
+            e.Property(x => x.Endpoint).HasMaxLength(1000);
+            e.Property(x => x.Token).HasMaxLength(64);
+            e.HasIndex(x => new { x.ProductId, x.NotifiedAt });
+            e.HasIndex(x => x.Token);
+            e.HasOne(x => x.Product).WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Variant).WithMany().HasForeignKey(x => x.VariantId).OnDelete(DeleteBehavior.NoAction);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
         });
         b.Entity<ServiceablePincode>().HasIndex(x => x.Pincode).IsUnique();
 
@@ -323,6 +343,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.Property(x => x.InvoiceTerms).HasMaxLength(4000);
             e.Property(x => x.BankDetails).HasMaxLength(2000);
+            e.Property(x => x.WelcomeCode).HasMaxLength(30);
+            e.Property(x => x.PickLabel).HasMaxLength(24);
         });
     }
 

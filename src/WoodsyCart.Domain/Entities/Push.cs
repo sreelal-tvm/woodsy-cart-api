@@ -35,8 +35,12 @@ public class PushSubscription : BaseEntity
     /// <summary>The cart on this device (different products in it, the latest one), as the storefront reports it, for "your cart is waiting".</summary>
     public int CartCount { get; set; }
     public int? CartProductId { get; set; }
+    /// <summary>All products in the cart on this device (comma separated), for "flash price in your cart ends soon".</summary>
+    public string? CartProductIds { get; set; }
     public DateTime? CartUpdatedAt { get; set; }
     public DateTime? CartRemindedAt { get; set; }
+    /// <summary>Last "flash price on your cart" reminder (once per flash-deal window).</summary>
+    public DateTime? FlashRemindedAt { get; set; }
 }
 
 /// <summary>

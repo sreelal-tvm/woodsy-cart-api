@@ -38,9 +38,10 @@ public class EmailSender(EmailQueue queue, EmailSettingsService settings, IOptio
     public string AdminOrderLink(Order o) => $"{AdminUrl}/orders/{o.Id}";
 
     public async Task CustomerAsync(EmailEvent ev, string? to, string subject, string heading, string bodyHtml,
-        (string Text, string Url)? button = null, EmailAttachment? attachment = null, int? orderId = null)
+        (string Text, string Url)? button = null, EmailAttachment? attachment = null, int? orderId = null,
+        List<int>? devices = null, string? image = null)
     {
-        await push.CustomerAsync(ev, to, orderId, Push.PushService.FromEmail(ev, subject, bodyHtml, button?.Url ?? StorefrontUrl, orderId));
+        await push.CustomerAsync(ev, to, orderId, Push.PushService.FromEmail(ev, subject, bodyHtml, button?.Url ?? StorefrontUrl, orderId) with { Image = image }, devices);
         if (string.IsNullOrWhiteSpace(to) || OrderService.IsPlaceholderEmail(to) || !await IsOnAsync(ev)) return;
         queue.Enqueue(new EmailMessage(ev, [to.Trim()], subject, EmailTemplates.Layout(heading, bodyHtml, button), attachment, orderId));
     }

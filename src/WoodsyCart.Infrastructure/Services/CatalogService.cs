@@ -23,6 +23,20 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
     public static string? MediaUrl(ProductImage? i) => i is null ? null : i.LocalPath ?? i.Url;
     public static string? ThumbUrl(ProductImage? i) => i is null ? null : i.LocalThumbnailPath ?? i.ThumbnailUrl ?? i.LocalPath ?? i.Url;
 
+    /// <summary>"Only N left" is shown for at most this many (the Admin setting picks 1–5).</summary>
+    public const int LowStockMax = 5;
+
+    /// <summary>
+    /// The vendor's tracked stock when it is low (1–5) and from a sync in the last 36 hours: the option's own count, or the
+    /// product's when it has no options (the vendor's product total doesn't match its options). Null otherwise.
+    /// </summary>
+    public static int? StockLeft(Product p, ProductVariant? v)
+    {
+        if (p.LastSyncedAt is not { } at || at < DateTime.UtcNow.AddHours(-36)) return null;
+        var q = v is not null ? v.StockQuantity : p.Variants.Any(x => x.IsActive) ? null : p.StockQuantity;
+        return q is > 0 and <= LowStockMax ? q : null;
+    }
+
     public static IQueryable<ProductCardDto> ToCards(IQueryable<Product> q) => q.Select(p => new ProductCardDto(
         p.Id, p.Name, p.Slug,
         p.Images.Where(i => i.MediaType == Domain.MediaType.Image).OrderBy(i => i.SortOrder).Select(i => i.LocalPath ?? i.Url).FirstOrDefault(),
@@ -36,7 +50,10 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
         p.Options.Where(o => o.IsColour).SelectMany(o => o.Values).Where(v => !v.IsHidden).OrderBy(v => v.SortOrder)
             .Select(v => v.ColorCode ?? v.Value).Take(5).ToList(),
         p.SellingPrice,
-        p.OfferPrice != null ? p.Offer!.Name : null, p.OfferPrice != null ? p.Offer!.Slug : null, p.OfferPrice != null ? p.Offer!.ThemeColor : null));
+        p.OfferPrice != null ? p.Offer!.Name : null, p.OfferPrice != null ? p.Offer!.Slug : null, p.OfferPrice != null ? p.Offer!.ThemeColor : null,
+        // Same rule as StockLeft (cards of products with options don't show it)
+        p.StockQuantity > 0 && p.StockQuantity <= LowStockMax && p.LastSyncedAt > DateTime.UtcNow.AddHours(-36) && !p.Variants.Any(v => v.IsActive) ? p.StockQuantity : null,
+        p.IsSellingFast, p.IsPick));
 
     public async Task<List<CategoryDto>> GetCategoriesAsync() =>
         (await cache.GetOrCreateAsync(CategoriesCacheKey, async e =>
@@ -167,6 +184,9 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
             : await q.FirstOrDefaultAsync(x => x.Slug == slugOrId);
         if (p is null) return null;
 
+        // YouTube videos show only when both the Business settings switch and the product's own switch are on
+        var youTube = p.ShowYouTubeVideo && await db.BusinessSettings.AsNoTracking().Select(s => s.ShowYouTubeVideos).FirstAsync();
+        var media = p.Images.Where(i => youTube || i.MediaType != Domain.MediaType.Video || ImageOptimizer.YouTubeId(i.Url) is null);
         var c = p.Category!;
         return new ProductDetailDto(
             p.Id, p.Name, p.Slug, p.Description, p.DescriptionHtml,
@@ -174,20 +194,43 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
             p.RatingAverage, p.RatingCount,
             new CategoryDto(c.Id, c.Name, c.Slug, c.ImageUrl, null, 0),
             p.Brand, p.Sku, p.HsnCode, p.GstRate, p.Material, p.Dimensions, p.Warranty, p.DeliveryDays, p.AssemblyIncluded,
-            p.Images.OrderBy(i => i.SortOrder).Select(i => new ImageDto(i.Id, MediaUrl(i)!, ThumbUrl(i), i.AltText ?? p.Name, (int)i.MediaType, i.VariantId)).ToList(),
+            media.OrderBy(i => i.SortOrder).Select(i => new ImageDto(i.Id, MediaUrl(i)!, ThumbUrl(i), i.AltText ?? p.Name, (int)i.MediaType, i.VariantId)).ToList(),
             p.Options.OrderBy(o => o.Position).Select(o => new OptionDto(o.Id, o.Name,
                 o.Values.Where(v => !v.IsHidden && (p.Variants.Any(x => x.IsActive && x.OptionValues.Any(ov => ov.Id == v.Id)) || p.Variants.Count == 0))
                     .OrderBy(v => v.SortOrder).ThenBy(v => v.Id)
                     .Select(v => new OptionValueDto(v.Id, v.Value, v.ColorCode)).ToList(), o.IsColour)).Where(o => o.Values.Count > 0).ToList(),
             p.Variants.Where(v => v.IsActive && v.SellingPrice > 0).OrderBy(v => v.SortOrder)
-                .Select(v => new VariantDto(v.Id, v.Name, v.Mrp, v.OfferPrice ?? v.SellingPrice, v.IsAvailable && p.IsAvailable, v.OptionValues.Select(o => o.Id).ToList(), v.SellingPrice)).ToList(),
+                .Select(v => new VariantDto(v.Id, v.Name, v.Mrp, v.OfferPrice ?? v.SellingPrice, v.IsAvailable && p.IsAvailable, v.OptionValues.Select(o => o.Id).ToList(), v.SellingPrice,
+                    StockLeft(p, v))).ToList(),
             p.Tags.Select(t => t.Name).ToList(),
             p.Collections.Where(x => x.IsActive).Select(x => new CollectionDto(x.Id, x.Name, x.Slug, x.ImageUrl, 0)).ToList(),
             p.MetaTitle, p.MetaDescription,
             p.SellingPrice,
             p.OfferPrice is not null && p.Offer is not null
-                ? new ProductOfferDto(p.Offer.Name, p.Offer.Slug, p.Offer.Tagline, p.Offer.ThemeColor, p.Offer.EndsAt, p.Offer.CouponCode)
-                : null);
+                ? new ProductOfferDto(p.Offer.Name, p.Offer.Slug, p.Offer.Tagline, p.Offer.ThemeColor,
+                    OfferSchedule.Current(p.Offer, DateTime.UtcNow)?.EndsAt ?? p.Offer.EndsAt, p.Offer.CouponCode, OfferSchedule.IsFlash(p.Offer))
+                : null,
+            p.IsAvailable ? await UpcomingDealAsync(p) : null,
+            StockLeft(p, null),
+            p.IsSellingFast, p.IsPick);
+    }
+
+    /// <summary>The soonest flash deal starting within a day that would lower this product's price (a teaser on its page).</summary>
+    private async Task<UpcomingDealDto?> UpcomingDealAsync(Product p)
+    {
+        var now = DateTime.UtcNow;
+        var candidates = (await new OfferService(db).CandidatesAsync(now))
+            .Where(lo => OfferSchedule.IsFlash(lo.Offer) && lo.Covers(p))
+            .Select(lo => (lo.Offer, Window: OfferSchedule.Next(lo.Offer, now)))
+            .Where(x => x.Window is not null && x.Window.StartsAt < now.AddDays(1))
+            .OrderBy(x => x.Window!.StartsAt).ToList();
+        if (candidates.Count == 0) return null;
+        var s = await db.BusinessSettings.AsNoTracking().FirstAsync();
+        var current = p.OfferPrice ?? p.SellingPrice;
+        foreach (var (o, w) in candidates)
+            if (OfferService.PriceFor(p.SellingPrice, p.VendorPrice, p.GstRate, o, s).price is { } price && price < current)
+                return new UpcomingDealDto(o.Name, o.Slug, o.ThemeColor, w!.StartsAt, w.EndsAt, price);
+        return null;
     }
 
     public async Task<List<ProductCardDto>> GetRelatedAsync(int productId, int take = 8)
@@ -212,21 +255,38 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
         var collections = await db.Collections.AsNoTracking().Where(c => c.IsActive && c.ImageUrl != null).OrderBy(c => c.SortOrder)
             .Select(c => new CollectionDto(c.Id, c.Name, c.Slug, c.ImageUrl, c.Products.Count(p => p.IsActive))).ToListAsync();
         var offers = new List<OfferDto>();
-        foreach (var o in await LiveOffersQuery().Where(o => o.ShowOnHome).ToListAsync())
+        foreach (var o in (await LiveOffersAsync()).Where(o => o.ShowOnHome))
             offers.Add(await ToOfferDtoAsync(o, 8));
         return new HomeDto(banners, categories, featured, newest, deals, collections, offers.Where(o => o.ProductCount > 0).ToList());
     }
 
     // ---------- Festival offers ----------
 
-    private IQueryable<Offer> LiveOffersQuery()
+    /// <summary>Enabled offers whose dates haven't passed (repeating ones may be between windows).</summary>
+    private async Task<List<Offer>> ScheduledOffersAsync()
     {
         var now = DateTime.UtcNow;
-        return db.Offers.AsNoTracking().Where(o => o.IsActive && o.StartsAt <= now && o.EndsAt > now).OrderBy(o => o.SortOrder).ThenBy(o => o.EndsAt);
+        return await db.Offers.AsNoTracking().Where(o => o.IsActive && o.EndsAt > now.AddDays(-1)).OrderBy(o => o.SortOrder).ThenBy(o => o.EndsAt).ToListAsync();
     }
 
-    public static string OfferStatus(Offer o, DateTime now) =>
-        !o.IsActive ? "off" : o.StartsAt > now ? "upcoming" : o.EndsAt <= now ? "ended" : "live";
+    /// <summary>Offers running right now, flash deals that end soonest first.</summary>
+    private async Task<List<Offer>> LiveOffersAsync()
+    {
+        var now = DateTime.UtcNow;
+        return (await ScheduledOffersAsync()).Where(o => OfferService.IsLive(o, now))
+            .OrderBy(o => o.SortOrder).ThenBy(o => OfferSchedule.Current(o, now)!.EndsAt).ToList();
+    }
+
+    public static string OfferStatus(Offer o, DateTime now) => OfferSchedule.Status(o, now);
+
+    /// <summary>The offer for customers, with the dates of the window running now (or the next one).</summary>
+    private static OfferDto Dto(Offer o, int count, List<ProductCardDto> cards)
+    {
+        var now = DateTime.UtcNow;
+        var w = OfferSchedule.Current(o, now) ?? OfferSchedule.Next(o, now) ?? new OfferWindow(o.StartsAt, o.EndsAt);
+        return new OfferDto(o.Id, o.Name, o.Slug, o.Tagline, o.Description, o.BannerImageUrl, o.ThemeColor, w.StartsAt, w.EndsAt,
+            OfferStatus(o, now), (int)o.DiscountType, o.Value, o.MaxDiscount, o.CouponCode, count, cards, OfferSchedule.IsFlash(o), OfferSchedule.Describe(o));
+    }
 
     private async Task<OfferDto> ToOfferDtoAsync(Offer o, int take)
     {
@@ -234,16 +294,20 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
         var count = await products.CountAsync();
         var cards = take == 0 ? [] : await ToCards(products.OrderByDescending(p => p.IsAvailable).ThenByDescending(p => p.IsFeatured)
             .ThenByDescending(p => p.SoldCount).ThenByDescending(p => p.Id).Take(take)).ToListAsync();
-        return new OfferDto(o.Id, o.Name, o.Slug, o.Tagline, o.Description, o.BannerImageUrl, o.ThemeColor, o.StartsAt, o.EndsAt,
-            OfferStatus(o, DateTime.UtcNow), (int)o.DiscountType, o.Value, o.MaxDiscount, o.CouponCode, count, cards);
+        return Dto(o, count, cards);
     }
 
-    /// <summary>Offers running now (for the Offers page and header link).</summary>
+    /// <summary>Offers running now (for the Offers page and header link), then flash deals starting within a day ("coming up").</summary>
     public async Task<List<OfferDto>> GetLiveOffersAsync()
     {
+        var now = DateTime.UtcNow;
         var list = new List<OfferDto>();
-        foreach (var o in await LiveOffersQuery().ToListAsync()) list.Add(await ToOfferDtoAsync(o, 4));
-        return list.Where(o => o.ProductCount > 0).ToList();
+        foreach (var o in await LiveOffersAsync()) list.Add(await ToOfferDtoAsync(o, 4));
+        list = list.Where(o => o.ProductCount > 0).ToList();
+        list.AddRange((await ScheduledOffersAsync())
+            .Where(o => OfferSchedule.IsFlash(o) && !OfferService.IsLive(o, now) && OfferSchedule.Next(o, now) is { } w && w.StartsAt < now.AddDays(1))
+            .OrderBy(o => OfferSchedule.Next(o, now)!.StartsAt).Select(o => Dto(o, 0, [])));
+        return list;
     }
 
     /// <summary>One offer's page. Upcoming and ended offers are returned without products so the page can say so.</summary>
@@ -251,10 +315,7 @@ public class CatalogService(AppDbContext db, IMemoryCache cache, EmailSender ema
     {
         var o = await db.Offers.AsNoTracking().FirstOrDefaultAsync(x => x.Slug == slug && x.IsActive);
         if (o is null) return null;
-        return OfferStatus(o, DateTime.UtcNow) == "live"
-            ? await ToOfferDtoAsync(o, 0)
-            : new OfferDto(o.Id, o.Name, o.Slug, o.Tagline, o.Description, o.BannerImageUrl, o.ThemeColor, o.StartsAt, o.EndsAt,
-                OfferStatus(o, DateTime.UtcNow), (int)o.DiscountType, o.Value, o.MaxDiscount, o.CouponCode, 0, []);
+        return OfferStatus(o, DateTime.UtcNow) == "live" ? await ToOfferDtoAsync(o, 0) : Dto(o, 0, []);
     }
 
     public async Task<PagedResult<ReviewDto>> GetReviewsAsync(int productId, int page)

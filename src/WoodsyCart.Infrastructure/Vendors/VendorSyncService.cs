@@ -253,7 +253,8 @@ public partial class VendorSyncService(
                 db.Tags.Add(tag);
                 existing.Add(tag);
             }
-            tag.Name = t.Name.Trim();
+            tag.VendorName = t.Name.Trim();
+            if (!tag.IsRenamed) tag.Name = tag.VendorName;
             if (!string.IsNullOrEmpty(t.TagColor)) tag.Color = t.TagColor;
         }
         await db.SaveChangesAsync(ct);
@@ -300,6 +301,7 @@ public partial class VendorSyncService(
         p.VendorMrp = item.Price;
         p.VendorPrice = newCost;
         p.IsAvailable = item.Available == 1 && item.IsActive == 1;
+        p.StockQuantity = item.ManagedInventory == 1 ? Math.Max(0, item.AvailableQuantity) : null;
         p.VendorUrl = item.Link;
         p.LastSyncedAt = DateTime.UtcNow;
         p.CategoryId = added || !p.LockContent ? categoryId : p.CategoryId;
@@ -348,7 +350,7 @@ public partial class VendorSyncService(
         var tags = await db.Tags.Where(t => tagIds.Contains(t.Id)).ToListAsync(ct);
         p.Collections.Clear(); foreach (var c in cols) p.Collections.Add(c);
         p.Tags.Clear(); foreach (var t in tags) p.Tags.Add(t);
-        if (added && tags.Any(t => t.Name.Contains("Bestseller", StringComparison.OrdinalIgnoreCase))) p.IsFeatured = true;
+        if (added && tags.Any(t => (t.VendorName ?? t.Name).Contains("Bestseller", StringComparison.OrdinalIgnoreCase))) p.IsFeatured = true;
         if (added)
         {
             var names = (item.Collections ?? []).Select(c => c.Name.Trim()).ToList();
@@ -470,6 +472,7 @@ public partial class VendorSyncService(
             v.VendorMrp = dv.Price;
             v.VendorPrice = dv.DiscountedPrice > 0 ? dv.DiscountedPrice : dv.Price;
             v.IsAvailable = dv.Available == 1;
+            v.StockQuantity = dv.ManagedInventory == 1 ? Math.Max(0, dv.AvailableQuantity) : null;
             v.SortOrder = sort++;
 
             // Vendor values follow the vendor; values added in Admin (e.g. a new option's first value) stay.
@@ -493,6 +496,7 @@ public partial class VendorSyncService(
             c.VendorMrp = src.VendorMrp;
             c.VendorPrice = src.VendorPrice;
             c.IsAvailable = src.IsAvailable;
+            c.StockQuantity = src.StockQuantity;
             c.IsActive = src.IsActive && !c.OptionValues.Any(o => o.IsHidden);
         }
         ProductOptions.RefreshVariantNames(p);

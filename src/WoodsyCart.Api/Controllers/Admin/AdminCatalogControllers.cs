@@ -32,7 +32,7 @@ public class AdminProductQuery
     public string? Search { get; set; }
     public int? CategoryId { get; set; }
     public string? Status { get; set; } // published, draft, unavailable, price-changed, featured, low-margin
-    public string? Social { get; set; } // not-posted, posted, out-of-date, queued, failed (Instagram or Facebook)
+    public string? Social { get; set; } // not-posted, posted, out-of-date, queued, failed (any account); not-on-threads; youtube-*
     public string Sort { get; set; } = "newest";
     public int Page { get; set; } = 1;
     public int PageSize { get; set; } = 25;
@@ -53,7 +53,7 @@ public record AdminProductDetail(
     bool IsActive, bool IsAvailable, bool IsFeatured, bool LockContent, ProductSource Source, long? VendorProductId, string? VendorUrl,
     DateTime? LastSyncedAt, string? MetaTitle, string? MetaDescription, List<int> CollectionIds, List<int> TagIds,
     List<AdminImageDto> Images, List<AdminVariantDto> Variants, int SoldCount, decimal RatingAverage, int RatingCount,
-    List<AdminOptionDto>? Options = null);
+    List<AdminOptionDto>? Options = null, bool ShowYouTubeVideo = false, bool IsPick = false, bool IsSellingFast = false, int RecentOrders = 0);
 
 public record VariantUpsert(int? Id, string Name, string? Sku, decimal VendorMrp, decimal VendorPrice, decimal Mrp, decimal SellingPrice, bool IsAvailable, bool IsActive);
 public record ProductUpsert(
@@ -61,7 +61,9 @@ public record ProductUpsert(
     string? Brand, string? Sku, string? HsnCode, decimal GstRate, string? Material, string? Dimensions, string? Warranty,
     int DeliveryDays, bool AssemblyIncluded, decimal VendorMrp, decimal VendorPrice, decimal Mrp, decimal SellingPrice,
     decimal? CommissionPercentOverride, bool ManualPrice, bool IsActive, bool IsAvailable, bool IsFeatured, bool LockContent,
-    string? MetaTitle, string? MetaDescription, List<int>? CollectionIds, List<int>? TagIds, List<VariantUpsert>? Variants);
+    string? MetaTitle, string? MetaDescription, List<int>? CollectionIds, List<int>? TagIds, List<VariantUpsert>? Variants,
+    bool? ShowYouTubeVideo = null, bool? IsPick = null);
+public record VideoLink(string Url);
 
 public record BulkProductAction(List<int> Ids, string Action, decimal? Value, int? CategoryId);
 public record PriceCalcRequest(decimal VendorMrp, decimal VendorPrice, decimal? Commission, int? CategoryId, decimal? GstRate);
@@ -113,6 +115,13 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
                 // Already on Instagram/Facebook but not on Threads yet (for catching up after connecting Threads)
                 "not-on-threads" => query.Where(p => p.IsActive
                     && !db.SocialPosts.Any(s => s.ProductId == p.Id && s.Platform == SocialPlatform.Threads && wanted.Contains(s.Status))),
+                // YouTube Shorts on their own (posted, not yet, waiting, failed)
+                "not-on-youtube" => query.Where(p => p.IsActive
+                    && !db.SocialPosts.Any(s => s.ProductId == p.Id && s.Platform == SocialPlatform.YouTubeShort && wanted.Contains(s.Status))),
+                "youtube-posted" => query.Where(p => db.SocialPosts.Any(s => s.ProductId == p.Id && s.Platform == SocialPlatform.YouTubeShort && live.Contains(s.Status))),
+                "youtube-queued" => query.Where(p => db.SocialPosts.Any(s => s.ProductId == p.Id && s.Platform == SocialPlatform.YouTubeShort
+                    && (s.Status == SocialPostStatus.Queued || s.Status == SocialPostStatus.Publishing))),
+                "youtube-failed" => query.Where(p => db.SocialPosts.Any(s => s.ProductId == p.Id && s.Platform == SocialPlatform.YouTubeShort && s.Status == SocialPostStatus.Failed)),
                 _ => query.Where(p => db.SocialPosts.Any(s => s.ProductId == p.Id && wanted.Contains(s.Status)))
             };
         }
@@ -174,7 +183,8 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
                 o.Values.Any(v => v.VendorValueId != null),
                 o.Values.OrderBy(v => v.SortOrder).ThenBy(v => v.Id).Select(v => new AdminOptionValueDto(v.Id, v.Value, v.ColorCode, v.VendorValue, v.VendorColorCode,
                     v.VendorValueId != null, v.IsCustomized, v.IsHidden, v.SortOrder,
-                    p.Variants.Count(x => x.IsActive && x.OptionValues.Any(ov => ov.Id == v.Id)))).ToList())).ToList());
+                    p.Variants.Count(x => x.IsActive && x.OptionValues.Any(ov => ov.Id == v.Id)))).ToList())).ToList(),
+            p.ShowYouTubeVideo, p.IsPick, p.IsSellingFast, p.RecentOrders);
     }
 
     [HttpPost]
@@ -212,6 +222,8 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
         if (r.ManualPrice) { p.Mrp = Math.Max(r.Mrp, r.SellingPrice); p.SellingPrice = r.SellingPrice; }
         p.IsActive = r.IsActive; p.IsAvailable = r.IsAvailable; p.IsFeatured = r.IsFeatured; p.LockContent = r.LockContent;
         p.MetaTitle = r.MetaTitle; p.MetaDescription = r.MetaDescription;
+        if (r.ShowYouTubeVideo is not null) p.ShowYouTubeVideo = r.ShowYouTubeVideo.Value;
+        if (r.IsPick is not null) p.IsPick = r.IsPick.Value;
 
         if (r.CollectionIds is not null)
         {
@@ -304,7 +316,7 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
     public async Task<object> Recalculate(int? categoryId) => new { updated = await pricing.RecalculateAsync(categoryId) };
 
     [HttpPost("{id:int}/images")]
-    [RequestSizeLimit(20_000_000)]
+    [RequestSizeLimit(MaxUpload)]
     public async Task<List<AdminImageDto>> Upload(int id, List<IFormFile> files)
     {
         var p = await db.Products.Include(x => x.Images).FirstOrDefaultAsync(x => x.Id == id) ?? throw new AppException("Product not found", 404);
@@ -323,6 +335,69 @@ public class ProductsController(AppDbContext db, PricingService pricing, FileSto
             cleaningQueue.Enqueue(added.Where(i => i.MediaType == MediaType.Image).Select(i => i.Id));
         return (await Get(id)).Images;
     }
+
+    /// <summary>Photos and MP4 videos; Cloudflare refuses uploads over 100 MB.</summary>
+    private const long MaxUpload = 95_000_000;
+
+    /// <summary>Adds a YouTube video (watch, Shorts or youtu.be link) to the product, after its photos.</summary>
+    [HttpPost("{id:int}/videos")]
+    public async Task<List<AdminImageDto>> AddVideoLink(int id, VideoLink req)
+    {
+        var p = await db.Products.Include(x => x.Images).FirstOrDefaultAsync(x => x.Id == id) ?? throw new AppException("Product not found", 404);
+        var yt = YouTubeIdOf(req.Url);
+        if (p.Images.Any(i => ImageOptimizer.YouTubeId(i.Url) == yt)) throw new AppException("This video is already on the product.");
+        p.Images.Add(new ProductImage
+        {
+            Url = $"https://www.youtube.com/watch?v={yt}", ThumbnailUrl = $"https://img.youtube.com/vi/{yt}/hqdefault.jpg",
+            AltText = p.Name, MediaType = MediaType.Video,
+            SortOrder = p.Images.Count == 0 ? 0 : p.Images.Max(i => i.SortOrder) + 1
+        });
+        await db.SaveChangesAsync();
+        return (await Get(id)).Images;
+    }
+
+    /// <summary>Swaps a video for a YouTube link or an uploaded MP4, in the same place. The vendor's copy is not brought
+    /// back: like deleting, this locks the product's content (vendor sync then updates price and stock only).</summary>
+    [HttpPut("images/{imageId:int}/video")]
+    public async Task<List<AdminImageDto>> ReplaceWithLink(int imageId, VideoLink req) => await ReplaceVideo(imageId, null, YouTubeIdOf(req.Url));
+
+    [HttpPost("images/{imageId:int}/video")]
+    [RequestSizeLimit(MaxUpload)]
+    public async Task<List<AdminImageDto>> ReplaceWithFile(int imageId, IFormFile file)
+    {
+        if (!file.FileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)) throw new AppException("Choose an MP4 video.");
+        var productId = await db.ProductImages.Where(i => i.Id == imageId).Select(i => (int?)i.ProductId).FirstOrDefaultAsync() ?? throw new AppException("Video not found", 404);
+        await using var s = file.OpenReadStream();
+        return await ReplaceVideo(imageId, await storage.SaveAsync(s, $"products/{productId}", file.FileName), null);
+    }
+
+    private async Task<List<AdminImageDto>> ReplaceVideo(int imageId, string? local, string? yt)
+    {
+        var img = await db.ProductImages.Include(i => i.Product).FirstOrDefaultAsync(i => i.Id == imageId) ?? throw new AppException("Video not found", 404);
+        if (img.MediaType != MediaType.Video) { storage.Delete(local); throw new AppException("Only videos can be replaced. Upload a new photo and delete the old one."); }
+        storage.Delete(img.LocalPath);
+        storage.Delete(img.LocalThumbnailPath);
+        img.Url = local ?? $"https://www.youtube.com/watch?v={yt}";
+        img.LocalPath = local;
+        img.ThumbnailUrl = yt is null ? null : $"https://img.youtube.com/vi/{yt}/hqdefault.jpg";
+        img.LocalThumbnailPath = null;
+        img.VendorImageId = null;
+        img.Product!.LockContent = true;
+        await db.SaveChangesAsync();
+        return (await Get(img.ProductId)).Images;
+    }
+
+    /// <summary>The product's own YouTube switch, saved straight away.</summary>
+    [HttpPut("{id:int}/youtube")]
+    public async Task<IActionResult> ShowYouTube(int id, [FromBody] bool show)
+    {
+        if (await db.Products.Where(p => p.Id == id).ExecuteUpdateAsync(s => s.SetProperty(p => p.ShowYouTubeVideo, show)) == 0)
+            throw new AppException("Product not found", 404);
+        return NoContent();
+    }
+
+    private static string YouTubeIdOf(string? url) => ImageOptimizer.YouTubeId(url?.Trim())
+        ?? throw new AppException("Paste a YouTube link, like https://youtu.be/… or https://www.youtube.com/shorts/…");
 
     [HttpDelete("images/{imageId:int}")]
     public async Task<IActionResult> DeleteImage(int imageId)

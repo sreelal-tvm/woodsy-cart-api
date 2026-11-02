@@ -12,7 +12,7 @@ namespace WoodsyCart.Infrastructure.Services;
 public record OrderAccess(int? UserId, string? Token);
 
 public partial class OrderService(AppDbContext db, RazorpayService razorpay, EmailSender email, PaymentConfigService payments,
-    Payments.Gateways.GatewayRegistry gateways)
+    Payments.Gateways.GatewayRegistry gateways, WelcomeOfferService welcome)
 {
     public const int ReturnWindowDays = 7;
 
@@ -66,6 +66,7 @@ public partial class OrderService(AppDbContext db, RazorpayService razorpay, Ema
     public async Task<(Coupon? coupon, decimal discount, string? message)> ApplyCouponAsync(string? code, decimal subTotal, int? userId)
     {
         if (string.IsNullOrWhiteSpace(code)) return (null, 0, null);
+        if (await welcome.TryApplyAsync(code, subTotal, userId) is { } w) return w;
         var now = DateTime.UtcNow;
         var c = await db.Coupons.FirstOrDefaultAsync(x => x.Code == code.Trim().ToUpper());
         if (c is null || !c.IsActive) return (null, 0, "Invalid coupon code.");
@@ -147,10 +148,17 @@ public partial class OrderService(AppDbContext db, RazorpayService razorpay, Ema
         return new QuoteDto(
             lines.Select(l => new QuoteLineDto(l.Product.Id, l.Variant?.Id, l.Product.Name, l.Variant?.Name, l.Product.Slug,
                 CatalogService.ThumbUrl(l.Product.Images.Where(i => i.MediaType == MediaType.Image).OrderBy(i => i.SortOrder).FirstOrDefault()),
-                l.Quantity, l.UnitMrp, l.UnitPrice, l.LineTotal, l.Problem is null, l.Problem, l.RegularPrice, l.Offer?.Name)).ToList(),
+                l.Quantity, l.UnitMrp, l.UnitPrice, l.LineTotal, l.Problem is null, l.Problem, l.RegularPrice, l.Offer?.Name,
+                // Flash deals: when the flash price ends, so the cart can count down
+                l.Offer is { } fo && OfferSchedule.IsFlash(fo) ? OfferSchedule.Current(fo, l.Now)?.EndsAt : null,
+                l.Problem is null ? CatalogService.StockLeft(l.Product, l.Variant) : null)).ToList(),
             subTotal, mrpTotal, discount, coupon?.Code, couponMsg, shipping, codFee, total, tax,
             valid.Count > 0 && lines.All(l => l.Problem is null) && (pin?.Serviceable ?? true),
-            codAvailable, deliveryDays, messages, valid.Sum(l => l.OfferSaving));
+            codAvailable, deliveryDays, messages, valid.Sum(l => l.OfferSaving),
+            // "Add ₹X more for free delivery" (only when a delivery fee and a free-delivery amount are set)
+            s.ShippingFee > 0 ? s.FreeShippingThreshold : 0,
+            s.ShippingFee > 0 && s.FreeShippingThreshold > 0 && subTotal > 0 ? Math.Max(0, s.FreeShippingThreshold - (subTotal - discount)) : 0,
+            s.ShippingFee);
     }
 
     /// <summary>GST contained in GST-inclusive prices, after distributing the discount proportionally.</summary>

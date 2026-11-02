@@ -28,7 +28,7 @@ public class PushAutomationWorker(IServiceScopeFactory scopes, ILogger<PushAutom
                 foreach (var (name, step) in new (string, Func<Task>)[]
                 {
                     ("payment reminders", run.PaymentRemindersAsync), ("review reminders", run.ReviewRemindersAsync),
-                    ("offers", run.OffersAsync), ("wishlist", run.WishlistAsync), ("carts", run.CartsAsync),
+                    ("flash carts", run.FlashCartsAsync), ("offers", run.OffersAsync), ("wishlist", run.WishlistAsync), ("carts", run.CartsAsync),
                     ("new arrivals", () => hour is >= 11 and < 20 ? run.NewArrivalsAsync() : Task.CompletedTask)
                 })
                 {
@@ -92,20 +92,31 @@ public class PushAutomation(AppDbContext db, PushService push, DateTime? now = n
         await db.SaveChangesAsync();
     }
 
-    /// <summary>An offer that started in the last 18 hours: one notification to everyone, opening the offer page.</summary>
+    /// <summary>
+    /// An offer that started in the last 18 hours: one notification to everyone, opening the offer page. Repeating flash deals
+    /// notify once per window (the price worker calls this the moment a window opens), and not when it is about to end.
+    /// </summary>
     public async Task OffersAsync()
     {
-        var offer = await db.Offers.Where(o => o.IsActive && o.PushSentAt == null && o.StartsAt <= Now && o.EndsAt > Now && o.StartsAt > Now.AddHours(-18))
-            .OrderBy(o => o.StartsAt).FirstOrDefaultAsync();
-        if (offer is null) return;
+        var candidates = await db.Offers.Where(o => o.IsActive && o.Notify && o.EndsAt > Now.AddDays(-1)).ToListAsync();
+        var due = candidates.Select(o => (Offer: o, Window: Services.OfferSchedule.Current(o, Now)))
+            .Where(x => x.Window is not null && x.Window.StartsAt > Now.AddHours(-18) && (x.Offer.PushSentAt is null || x.Offer.PushSentAt < x.Window.StartsAt)
+                        && x.Window.EndsAt > Now.AddMinutes(3))
+            .OrderBy(x => x.Window!.StartsAt).FirstOrDefault();
+        if (due.Offer is null) return;
+        var (offer, window) = (due.Offer, due.Window!);
         offer.PushSentAt = Now;
         await db.SaveChangesAsync();
         if (!await push.IsOnAsync(PushEvents.OfferLive, team: false)) return;
-        var ends = TimeZoneInfo.ConvertTimeFromUtc(offer.EndsAt, India);
+        var ends = TimeZoneInfo.ConvertTimeFromUtc(window.EndsAt, India);
         var url = push.StoreLink($"/offers/{offer.Slug}", $"offer-{offer.Id}");
-        await push.BroadcastAsync("OfferLive", new PushMessage($"{offer.Name} is live 🎉",
-            $"{(string.IsNullOrWhiteSpace(offer.Tagline) ? "Special prices for a limited time." : offer.Tagline.Trim().TrimEnd('.') + ".")} Ends {ends:d MMM}.",
-            url, $"offer-{offer.Id}", push.AbsoluteMedia(offer.BannerImageUrl)));
+        var tagline = string.IsNullOrWhiteSpace(offer.Tagline) ? "Special prices for a limited time." : offer.Tagline.Trim().TrimEnd('.') + ".";
+        var message = Services.OfferSchedule.IsFlash(offer)
+            ? new PushMessage($"⚡ {offer.Name} — live now",
+                $"{tagline} Only till {ends.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture).ToLowerInvariant()}.",
+                url, $"offer-{offer.Id}", push.AbsoluteMedia(offer.BannerImageUrl))
+            : new PushMessage($"{offer.Name} is live 🎉", $"{tagline} Ends {ends:d MMM}.", url, $"offer-{offer.Id}", push.AbsoluteMedia(offer.BannerImageUrl));
+        await push.BroadcastAsync("OfferLive", message);
     }
 
     /// <summary>Newly published products, at most once a day: one product opens its page, more open the newest products.</summary>
@@ -149,6 +160,48 @@ public class PushAutomation(AppDbContext db, PushService push, DateTime? now = n
             var what = p is null ? "Your picks are" : s.CartCount > 1 ? $"{p.Name} and {s.CartCount - 1} more are" : $"{p.Name} is";
             push.Enqueue(new PushJob(new PushMessage("Your cart is waiting 🛒", $"{what} still in your cart. Finish your order in a minute.",
                 push.StoreLink("/cart", "cart-reminder"), "cart", push.AbsoluteMedia(p?.Image)), [s.Id]));
+        }
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// A flash deal running now covers something in a device's cart: one reminder per deal window with the deadline
+    /// ("Sofa X is ₹24,999 till 8:15 pm"). Runs before the "offer is live" broadcast, so these devices get this instead.
+    /// </summary>
+    public async Task FlashCartsAsync()
+    {
+        var windows = (await db.Offers.AsNoTracking().Where(o => o.IsActive && o.EndsAt > Now.AddDays(-1)).ToListAsync())
+            .Where(Services.OfferSchedule.IsFlash)
+            .Select(o => (Offer: o, Window: Services.OfferSchedule.Current(o, Now)))
+            .Where(x => x.Window is not null && x.Window.EndsAt > Now.AddMinutes(3))
+            .ToDictionary(x => x.Offer.Id, x => x.Window!);
+        if (windows.Count == 0 || !await push.IsOnAsync(PushEvents.FlashCartReminder, team: false)) return;
+        var ids = windows.Keys.ToList();
+        var onDeal = await db.Products.AsNoTracking().Where(p => p.IsActive && p.IsAvailable && p.OfferId != null && ids.Contains(p.OfferId.Value) && p.OfferPrice != null)
+            .Select(p => new { p.Id, p.Name, p.Slug, p.SellingPrice, Price = p.OfferPrice!.Value, OfferId = p.OfferId!.Value,
+                Image = p.Images.Where(i => i.MediaType == MediaType.Image).OrderBy(i => i.SortOrder).Select(i => i.LocalPath ?? i.Url).FirstOrDefault() })
+            .ToDictionaryAsync(p => p.Id);
+        if (onDeal.Count == 0) return;
+
+        var subs = await db.PushSubscriptions.Where(s => !s.IsAdmin && s.Promotions && s.CartCount > 0).ToListAsync();
+        var users = subs.Where(s => s.UserId != null).Select(s => s.UserId!.Value).Distinct().ToList();
+        var userCarts = (await db.CartItems.AsNoTracking().Where(c => users.Contains(c.UserId)).Select(c => new { c.UserId, c.ProductId }).ToListAsync())
+            .ToLookup(c => c.UserId, c => c.ProductId);
+        foreach (var s in subs)
+        {
+            var cart = Services.OfferSchedule.Numbers(s.CartProductIds).ToHashSet();
+            if (s.CartProductId is { } one) cart.Add(one);
+            if (s.UserId is { } uid) cart.UnionWith(userCarts[uid]);
+            var hit = cart.Where(onDeal.ContainsKey).Select(id => onDeal[id])
+                .Where(p => s.FlashRemindedAt is null || s.FlashRemindedAt < windows[p.OfferId].StartsAt)
+                .OrderBy(p => windows[p.OfferId].EndsAt).FirstOrDefault();
+            if (hit is null) continue;
+            s.FlashRemindedAt = Now; s.LastPromoAt = Now;
+            var ends = TimeZoneInfo.ConvertTimeFromUtc(windows[hit.OfferId].EndsAt, India)
+                .ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture).ToLowerInvariant();
+            push.Enqueue(new PushJob(new PushMessage($"⚡ Flash price on your cart — till {ends}",
+                $"{hit.Name} is now {Rs(hit.Price)} (save {Rs(hit.SellingPrice - hit.Price)}). Check out before {ends} to get it.",
+                push.StoreLink("/cart", "flash-cart"), "flash-cart", push.AbsoluteMedia(hit.Image)), [s.Id]));
         }
         await db.SaveChangesAsync();
     }

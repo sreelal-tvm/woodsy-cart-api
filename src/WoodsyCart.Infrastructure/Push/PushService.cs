@@ -25,7 +25,7 @@ public record PushDeviceDto(int Id, string? Device, DateTime CreatedAt, DateTime
 public record PushStatusDto(string PublicKey, bool ThisDevice, List<PushDeviceDto> Devices);
 public record CustomerPushStatusDto(string PublicKey, bool On, bool Enabled, bool Promotions);
 public record PushPreferencesRequest(string Endpoint, bool Promotions);
-public record PushCartRequest(string Endpoint, int Count, int? ProductId);
+public record PushCartRequest(string Endpoint, int Count, int? ProductId, List<int>? ProductIds = null);
 public record PushSettingsDto(bool CustomersEnabled, bool TeamEnabled, Dictionary<string, bool> Events, PushEventInfo[] EventCatalog,
     int CustomerDevices, int TeamDevices);
 public record PushSettingsUpdate(bool CustomersEnabled, bool TeamEnabled, Dictionary<string, bool> Events);
@@ -102,11 +102,12 @@ public class PushService(AppDbContext db, IDataProtectionProvider dp, PushQueue 
 
     // ---------- Sending ----------
 
-    /// <summary>To the customer's devices: those turned on with this email, from this order, or signed in as the order's customer.</summary>
-    public async Task CustomerAsync(EmailEvent ev, string? email, int? orderId, PushMessage m)
+    /// <summary>To the customer's devices: those turned on with this email, from this order, or signed in as the order's customer
+    /// (or exactly the <paramref name="devices"/> given).</summary>
+    public async Task CustomerAsync(EmailEvent ev, string? email, int? orderId, PushMessage m, List<int>? devices = null)
     {
         if (!await IsOnAsync(ev.ToString(), team: false)) return;
-        Enqueue(new PushJob(m, await CustomerDevicesAsync(email, orderId)));
+        Enqueue(new PushJob(m, devices ?? await CustomerDevicesAsync(email, orderId)));
     }
 
     public async Task<List<int>> CustomerDevicesAsync(string? email, int? orderId)
@@ -329,6 +330,8 @@ public class PushService(AppDbContext db, IDataProtectionProvider dp, PushQueue 
         var count = Math.Clamp(r.Count, 0, 999);
         if (count > s.CartCount) s.CartRemindedAt = null; // something new in the cart: worth one more reminder
         s.CartCount = count; s.CartProductId = count > 0 ? r.ProductId : null; s.CartUpdatedAt = DateTime.UtcNow;
+        var ids = string.Join(",", (r.ProductIds ?? []).Where(i => i > 0).Distinct().Take(40));
+        s.CartProductIds = count > 0 && ids.Length > 0 ? ids : null;
         await db.SaveChangesAsync();
     }
 

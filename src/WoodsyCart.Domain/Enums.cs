@@ -37,6 +37,9 @@ public enum DiscountType { Percent = 0, Flat = 1 }
 
 public enum OfferScope { AllProducts = 0, Categories = 1, Products = 2 }
 
+/// <summary>Once: the offer runs from StartsAt to EndsAt. Otherwise it runs for WindowMinutes from WindowStart (India time) on each matching day between those dates.</summary>
+public enum OfferRepeat { Once = 0, Daily = 1, Weekly = 2, MonthlyWeekday = 3, MonthlyDates = 4 }
+
 /// <summary>Where an order came from. Website orders are placed by customers; the rest are entered in Admin.</summary>
 public enum SalesChannel { Website = 0, Instagram = 1, Facebook = 2, WhatsApp = 3, Phone = 4, WalkIn = 5, Other = 6 }
 

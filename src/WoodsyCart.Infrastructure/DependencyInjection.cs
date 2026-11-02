@@ -13,8 +13,11 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration config, string webRootPath)
     {
-        services.AddDbContext<AppDbContext>(o => o.UseSqlServer(config.GetConnectionString("Default"),
-            sql => sql.EnableRetryOnFailure(3).UseQuerySplittingBehavior(QuerySplittingBehavior.SingleQuery)));
+        services.AddSingleton<StockAlertQueue>();
+        services.AddSingleton<StockAlertInterceptor>();
+        services.AddDbContext<AppDbContext>((sp, o) => o.UseSqlServer(config.GetConnectionString("Default"),
+            sql => sql.EnableRetryOnFailure(3).UseQuerySplittingBehavior(QuerySplittingBehavior.SingleQuery))
+            .AddInterceptors(sp.GetRequiredService<StockAlertInterceptor>()));
 
         services.Configure<JwtOptions>(config.GetSection("Jwt"));
         services.Configure<RazorpayOptions>(config.GetSection("Razorpay"));
@@ -25,6 +28,11 @@ public static class DependencyInjection
         services.AddScoped<PricingService>();
         services.AddMemoryCache();
         services.AddScoped<CatalogService>();
+        services.AddScoped<StockAlertService>();
+        services.AddScoped<WelcomeOfferService>();
+        services.AddHostedService<WelcomeOfferWorker>();
+        services.AddScoped<SellingFastService>();
+        services.AddHostedService<SellingFastWorker>();
         services.AddScoped<OrderService>();
         services.AddScoped<PaymentConfigService>();
         services.AddScoped<PaymentAlertService>();
@@ -45,6 +53,7 @@ public static class DependencyInjection
         services.AddSingleton<Push.PushQueue>();
         services.AddHostedService<Push.PushWorker>();
         services.AddHostedService<Push.PushAutomationWorker>();
+        services.AddHostedService<StockAlertWorker>();
         services.AddScoped<DbSeeder>();
         services.AddHttpClient<RazorpayService>();
         services.AddHttpClient<Payments.Gateways.PhonePeGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));

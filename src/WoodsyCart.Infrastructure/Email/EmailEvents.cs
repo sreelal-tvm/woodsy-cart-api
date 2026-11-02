@@ -5,7 +5,7 @@ public enum EmailEvent
 {
     // To the customer
     OrderPlaced, PaymentReceived, OrderConfirmed, OrderWithVendor, OrderDispatched, OrderOutForDelivery, OrderDelivered,
-    DeliveryDateChanged, OrderCancelled, ReturnRequested, RefundProcessed, OrderNote, AccountCreated, EnquiryReceived,
+    DeliveryDateChanged, OrderCancelled, ReturnRequested, RefundProcessed, OrderNote, AccountCreated, EnquiryReceived, BackInStock, WelcomeOfferEnding,
     // To the admin team
     AdminNewOrder, AdminPaymentReceived, AdminUtrSubmitted, AdminUnmatchedPayment, AdminOrderCancelled, AdminReturnRequested,
     AdminNewEnquiry, AdminNewReview, AdminVendorSync, AdminSocialProblem, AdminSocialComments,
@@ -33,6 +33,8 @@ public static class EmailEvents
         new(nameof(EmailEvent.OrderNote), "Order update note", "Customer", "A note you add to the order with \"Visible to customer\" ticked."),
         new(nameof(EmailEvent.AccountCreated), "Welcome", "Customer", "After the customer creates an account."),
         new(nameof(EmailEvent.EnquiryReceived), "Enquiry received", "Customer", "Confirms their contact-form message (when they gave an email)."),
+        new(nameof(EmailEvent.BackInStock), "Back in stock (Notify me)", "Customer", "A sold-out product the customer asked about with \"Notify me\" is available again (once)."),
+        new(nameof(EmailEvent.WelcomeOfferEnding), "Welcome offer ending", "Customer", "A few hours before a new account's welcome offer ends, if they haven't ordered yet (once)."),
         new(nameof(EmailEvent.AdminNewOrder), "New order", "Admin", "Every new order — website and manual — with items, customer and payment."),
         new(nameof(EmailEvent.AdminPaymentReceived), "Payment received", "Admin", "A customer payment was received (gateway, UPI alert or recorded)."),
         new(nameof(EmailEvent.AdminUtrSubmitted), "UPI reference to check", "Admin", "A customer entered a UPI reference that hasn't been matched to a bank alert yet."),

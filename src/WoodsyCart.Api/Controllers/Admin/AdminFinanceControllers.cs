@@ -290,11 +290,23 @@ public class CouponsController(AppDbContext db) : AdminControllerBase
     [HttpGet]
     public Task<List<Coupon>> List() => db.Coupons.AsNoTracking().OrderByDescending(c => c.Id).ToListAsync();
 
+    /// <summary>The welcome offer for new accounts (kept in Business settings) and how it is doing.</summary>
+    [HttpGet("welcome")]
+    public Task<WelcomeOfferAdminDto> Welcome([FromServices] WelcomeOfferService welcome) => welcome.AdminAsync();
+
+    [HttpPut("welcome")]
+    public async Task<WelcomeOfferAdminDto> SaveWelcome(WelcomeOfferSettings r, [FromServices] WelcomeOfferService welcome)
+    {
+        await welcome.SaveAsync(r);
+        return await welcome.AdminAsync();
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create(Coupon c)
     {
         c.Id = 0; c.Code = c.Code.Trim().ToUpper(); c.UsedCount = 0;
         if (await db.Coupons.AnyAsync(x => x.Code == c.Code)) throw new AppException("Coupon code already exists.");
+        await NotWelcomeCodeAsync(c.Code);
         db.Coupons.Add(c);
         await db.SaveChangesAsync();
         return NoContent();
@@ -304,10 +316,17 @@ public class CouponsController(AppDbContext db) : AdminControllerBase
     public async Task<IActionResult> Update(int id, Coupon r)
     {
         var c = await db.Coupons.FindAsync(id) ?? throw new AppException("Coupon not found", 404);
+        await NotWelcomeCodeAsync(r.Code.Trim().ToUpper());
         c.Code = r.Code.Trim().ToUpper(); c.Description = r.Description; c.DiscountType = r.DiscountType; c.Value = r.Value; c.MaxDiscount = r.MaxDiscount;
         c.MinOrderAmount = r.MinOrderAmount; c.StartsAt = r.StartsAt; c.EndsAt = r.EndsAt; c.UsageLimit = r.UsageLimit; c.PerUserLimit = r.PerUserLimit; c.IsActive = r.IsActive;
         await db.SaveChangesAsync();
         return NoContent();
+    }
+
+    private async Task NotWelcomeCodeAsync(string code)
+    {
+        if (await db.BusinessSettings.AnyAsync(s => s.WelcomeCode == code))
+            throw new AppException($"{code} is the welcome offer's code — pick another code.");
     }
 
     [HttpDelete("{id:int}")]
@@ -440,7 +459,21 @@ public class EnquiriesController(AppDbContext db) : AdminControllerBase
     }
 }
 
-public class SettingsController(AppDbContext db, PricingService pricing) : AdminControllerBase
+/// <summary>"Notify me" requests on sold-out products: waiting, or already told.</summary>
+public class StockAlertsController(StockAlertService alerts) : AdminControllerBase
+{
+    [HttpGet]
+    public Task<List<AdminStockAlertDto>> List(bool notified = false, int? productId = null) => alerts.ListAsync(notified, productId);
+
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        await alerts.DeleteAsync(id);
+        return NoContent();
+    }
+}
+
+public class SettingsController(AppDbContext db, PricingService pricing, SellingFastService sellingFast) : AdminControllerBase
 {
     [HttpGet]
     public Task<BusinessSettings> Get() => db.BusinessSettings.AsNoTracking().FirstAsync();
@@ -456,12 +489,22 @@ public class SettingsController(AppDbContext db, PricingService pricing) : Admin
         if (r.MapsEnabled && r.GoogleMapsApiKey is null) throw new AppException("Paste your Google Maps API key before switching maps on.");
         var repriced = s.DefaultCommissionPercent != r.DefaultCommissionPercent || s.PriceRounding != r.PriceRounding
                        || s.VendorPricesIncludeGst != r.VendorPricesIncludeGst;
+        if (r.LowStockBadgeAt is < 0 or > CatalogService.LowStockMax) throw new AppException("\"Only N left\" can be shown at 1 to 5 (or never).");
+        if (r.SellingFastOrders is < 0 or > 100) throw new AppException("\"Selling fast\" needs 1 to 100 orders (or never).");
+        if (r.SellingFastDays is < 1 or > SellingFastService.MaxDays) throw new AppException($"Count \"Selling fast\" orders over 1 to {SellingFastService.MaxDays} days.");
+        if (SellingFastService.PickLabelProblem(r.PickLabel) is { } label) throw new AppException(label);
+        r.PickLabel = r.PickLabel.Trim();
+        var recount = s.SellingFastOrders != r.SellingFastOrders || s.SellingFastDays != r.SellingFastDays;
         var id = s.Id; var created = s.CreatedAt;
+        // The welcome offer is saved from Admin → Coupons; keep it as it is
+        var welcome = (s.WelcomeOfferEnabled, s.WelcomeCode, s.WelcomeDiscountType, s.WelcomeDiscountValue, s.WelcomeMaxDiscount, s.WelcomeMinOrder, s.WelcomeValidHours);
         db.Entry(s).CurrentValues.SetValues(r);
         s.Id = id; s.CreatedAt = created;
+        (s.WelcomeOfferEnabled, s.WelcomeCode, s.WelcomeDiscountType, s.WelcomeDiscountValue, s.WelcomeMaxDiscount, s.WelcomeMinOrder, s.WelcomeValidHours) = welcome;
         s.InvoicePrefix = string.IsNullOrWhiteSpace(r.InvoicePrefix) ? "WC" : r.InvoicePrefix.Trim().ToUpper();
         await db.SaveChangesAsync();
         var updated = repriced ? await pricing.RecalculateAsync() : 0;
+        if (recount) await sellingFast.RefreshAsync();
         return new { repricedProducts = updated };
     }
 }

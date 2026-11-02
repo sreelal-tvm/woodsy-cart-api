@@ -52,6 +52,7 @@ public static class Traffic
 
         // Signed-in requests are never cached (default rule), so personal data can't leak between customers.
         services.AddOutputCache(o => o.AddPolicy(Catalog, b => b.Expire(TimeSpan.FromSeconds(60)).Tag(Catalog)));
+        services.AddSingleton<Infrastructure.Services.ICatalogCache, CatalogCache>();
 
         services.AddResponseCompression(o =>
         {
@@ -84,6 +85,12 @@ public static class Traffic
             && ctx.Request.Path.StartsWithSegments("/api/admin") && ctx.Response.StatusCode < 400)
             await ctx.RequestServices.GetRequiredService<IOutputCacheStore>().EvictByTagAsync(Catalog, default);
     });
+
+    /// <summary>Lets background jobs (flash deals starting or ending) clear the cached catalog.</summary>
+    private sealed class CatalogCache(IOutputCacheStore store) : Infrastructure.Services.ICatalogCache
+    {
+        public Task ClearAsync() => store.EvictByTagAsync(Catalog, default).AsTask();
+    }
 
     private static string ClientKey(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 

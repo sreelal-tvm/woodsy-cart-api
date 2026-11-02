@@ -52,6 +52,21 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.ToTable("OfferCategories");
                 });
 
+            modelBuilder.Entity("OfferExcludedProducts", b =>
+                {
+                    b.Property<int>("OfferId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProductId")
+                        .HasColumnType("int");
+
+                    b.HasKey("OfferId", "ProductId");
+
+                    b.HasIndex("ProductId");
+
+                    b.ToTable("OfferExcludedProducts");
+                });
+
             modelBuilder.Entity("OfferProducts", b =>
                 {
                     b.Property<int>("OfferId")
@@ -239,6 +254,12 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<DateTime?>("WelcomeOfferEndsAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("WelcomeRemindedAt")
+                        .HasColumnType("datetime2");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Email")
@@ -409,6 +430,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<int>("LowStockBadgeAt")
+                        .HasColumnType("int");
+
                     b.Property<bool>("MapsEnabled")
                         .HasColumnType("bit");
 
@@ -421,6 +445,11 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("PickLabel")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("nvarchar(24)");
+
                     b.Property<string>("Pincode")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -432,9 +461,18 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<bool>("RestrictToServiceablePincodes")
                         .HasColumnType("bit");
 
+                    b.Property<int>("SellingFastDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SellingFastOrders")
+                        .HasColumnType("int");
+
                     b.Property<decimal>("ShippingFee")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<bool>("ShowYouTubeVideos")
+                        .HasColumnType("bit");
 
                     b.Property<string>("State")
                         .IsRequired()
@@ -471,6 +509,32 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<string>("Website")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("WelcomeCode")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<int>("WelcomeDiscountType")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("WelcomeDiscountValue")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("WelcomeMaxDiscount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("WelcomeMinOrder")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<bool>("WelcomeOfferEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("WelcomeValidHours")
+                        .HasColumnType("int");
 
                     b.Property<string>("WhatsApp")
                         .HasMaxLength(500)
@@ -1137,8 +1201,25 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<bool>("Notify")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime?>("PushSentAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<int>("Repeat")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RepeatDays")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("RepeatWeeks")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int>("Rounding")
+                        .HasColumnType("int");
 
                     b.Property<int>("Scope")
                         .HasColumnType("int");
@@ -1172,6 +1253,12 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<decimal>("Value")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("WindowMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<TimeSpan?>("WindowStart")
+                        .HasColumnType("time");
 
                     b.HasKey("Id");
 
@@ -1802,6 +1889,12 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<bool>("IsFeatured")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsPick")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsSellingFast")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime?>("LastSyncedAt")
                         .HasColumnType("datetime2");
 
@@ -1853,9 +1946,15 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<int>("RatingCount")
                         .HasColumnType("int");
 
+                    b.Property<int>("RecentOrders")
+                        .HasColumnType("int");
+
                     b.Property<decimal>("SellingPrice")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<bool>("ShowYouTubeVideo")
+                        .HasColumnType("bit");
 
                     b.Property<string>("Sku")
                         .HasMaxLength(500)
@@ -1873,6 +1972,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .HasColumnType("int");
 
                     b.Property<int>("Source")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("StockQuantity")
                         .HasColumnType("int");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -2164,6 +2266,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<int?>("SourceVariantId")
                         .HasColumnType("int");
 
+                    b.Property<int?>("StockQuantity")
+                        .HasColumnType("int");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 
@@ -2374,6 +2479,10 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<int?>("CartProductId")
                         .HasColumnType("int");
 
+                    b.Property<string>("CartProductIds")
+                        .HasMaxLength(400)
+                        .HasColumnType("nvarchar(400)");
+
                     b.Property<DateTime?>("CartRemindedAt")
                         .HasColumnType("datetime2");
 
@@ -2395,6 +2504,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime?>("FlashRemindedAt")
+                        .HasColumnType("datetime2");
 
                     b.Property<bool>("IsAdmin")
                         .HasColumnType("bit");
@@ -3020,6 +3132,68 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.ToTable("SocialPosts");
                 });
 
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.StockAlert", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Endpoint")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<DateTime?>("NotifiedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Phone")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int>("ProductId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("UserId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("VariantId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Token");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("VariantId");
+
+                    b.HasIndex("ProductId", "NotifiedAt");
+
+                    b.ToTable("StockAlerts");
+                });
+
             modelBuilder.Entity("WoodsyCart.Domain.Entities.Tag", b =>
                 {
                     b.Property<int>("Id")
@@ -3036,6 +3210,9 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<bool>("IsRenamed")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -3043,6 +3220,10 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("VendorName")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<long?>("VendorTagId")
                         .HasColumnType("bigint");
@@ -3396,6 +3577,21 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("OfferExcludedProducts", b =>
+                {
+                    b.HasOne("WoodsyCart.Domain.Entities.Offer", null)
+                        .WithMany()
+                        .HasForeignKey("OfferId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("WoodsyCart.Domain.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("OfferProducts", b =>
                 {
                     b.HasOne("WoodsyCart.Domain.Entities.Offer", null)
@@ -3721,6 +3917,31 @@ namespace WoodsyCart.Infrastructure.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Product");
+                });
+
+            modelBuilder.Entity("WoodsyCart.Domain.Entities.StockAlert", b =>
+                {
+                    b.HasOne("WoodsyCart.Domain.Entities.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("WoodsyCart.Domain.Entities.AppUser", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("WoodsyCart.Domain.Entities.ProductVariant", "Variant")
+                        .WithMany()
+                        .HasForeignKey("VariantId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("Product");
+
+                    b.Navigation("User");
+
+                    b.Navigation("Variant");
                 });
 
             modelBuilder.Entity("WoodsyCart.Domain.Entities.VendorBill", b =>

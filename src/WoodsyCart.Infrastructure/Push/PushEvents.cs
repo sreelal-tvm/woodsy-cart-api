@@ -13,7 +13,7 @@ public static class PushEvents
 {
     public const string OfferLive = "OfferLive", NewArrivals = "NewArrivals", CartReminder = "CartReminder",
         WishlistPriceDrop = "WishlistPriceDrop", WishlistBackInStock = "WishlistBackInStock",
-        PaymentReminder = "PaymentReminder", ReviewReminder = "ReviewReminder";
+        PaymentReminder = "PaymentReminder", ReviewReminder = "ReviewReminder", FlashCartReminder = "FlashCartReminder";
 
     /// <summary>App only (no email).</summary>
     public static readonly PushEventInfo[] AppOnly =
@@ -23,6 +23,7 @@ public static class PushEvents
         new(OfferLive, "Offer is live", "Customer", "When an offer starts — opens the offer page, with its banner.", "Promo"),
         new(NewArrivals, "New arrivals", "Customer", "Newly published products, at most once a day — opens the product, or the newest products.", "Promo"),
         new(CartReminder, "Cart waiting", "Customer", "3 hours after something was left in the cart (once).", "Promo"),
+        new(FlashCartReminder, "Flash price in cart", "Customer", "A flash deal covers something in their cart — tells them when the flash price ends (once per deal).", "Promo"),
         new(WishlistPriceDrop, "Wishlist price drop", "Customer", "A product on their wishlist got at least 3% cheaper.", "Promo"),
         new(WishlistBackInStock, "Wishlist back in stock", "Customer", "A product on their wishlist is available again.", "Promo"),
     ];

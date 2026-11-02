@@ -21,6 +21,9 @@ public class AppUser : BaseEntity
     /// <summary>When the password was last set, and by whom ("Customer" or the admin's name).</summary>
     public DateTime? PasswordChangedAt { get; set; }
     public string? PasswordChangedBy { get; set; }
+    /// <summary>Welcome offer: until when this account can use it on its first order (set on sign-up while the offer is on).</summary>
+    public DateTime? WelcomeOfferEndsAt { get; set; }
+    public DateTime? WelcomeRemindedAt { get; set; }
     public ICollection<Address> Addresses { get; set; } = [];
     public ICollection<Order> Orders { get; set; } = [];
 }
@@ -75,6 +78,29 @@ public class Enquiry : BaseEntity
     public Product? Product { get; set; }
     public EnquiryStatus Status { get; set; } = EnquiryStatus.New;
     public string? AdminNotes { get; set; }
+}
+
+/// <summary>
+/// "Notify me" on a sold-out product (or option): we email the customer, and send an app notification to their devices,
+/// once it is available again. Signed in, or a guest's name, phone and email (linked to the account with that email or phone).
+/// </summary>
+public class StockAlert : BaseEntity
+{
+    public int ProductId { get; set; }
+    public Product? Product { get; set; }
+    /// <summary>The sold-out option chosen (empty = the product itself).</summary>
+    public int? VariantId { get; set; }
+    public ProductVariant? Variant { get; set; }
+    public int? UserId { get; set; }
+    public AppUser? User { get; set; }
+    public string Name { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string? Phone { get; set; }
+    /// <summary>The browser's push address when the device had notifications on, so a guest's phone gets it too.</summary>
+    public string? Endpoint { get; set; }
+    /// <summary>Lets a guest's browser check and cancel its own request.</summary>
+    public string Token { get; set; } = "";
+    public DateTime? NotifiedAt { get; set; }
 }
 
 public class ServiceablePincode : BaseEntity

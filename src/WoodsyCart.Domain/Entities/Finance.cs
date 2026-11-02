@@ -186,6 +186,25 @@ public class BusinessSettings : BaseEntity
     public bool ImageCleanRecentre { get; set; } = true;      // studio shots: white background, centred product
     public bool ImageCleanEnhance { get; set; } = true;       // room shots: gentle exposure / colour correction
 
+    /// <summary>Master switch for YouTube videos on product pages; each product also has its own switch (Product.ShowYouTubeVideo).</summary>
+    public bool ShowYouTubeVideos { get; set; } = true;
+    /// <summary>"Only N left" on products whose vendor stock is at or below this (1–5); 0 = never shown.</summary>
+    public int LowStockBadgeAt { get; set; } = 3;
+    /// <summary>"Selling fast" on products in at least this many orders in the last SellingFastDays days; 0 = never shown.</summary>
+    public int SellingFastOrders { get; set; } = 3;
+    public int SellingFastDays { get; set; } = 7;
+    /// <summary>The label for products Admin marks themselves (Product.IsPick). It can't claim sales or popularity.</summary>
+    public string PickLabel { get; set; } = "Woodsy pick";
+
+    // Welcome offer (Admin → Coupons): a new account's first order, within WelcomeValidHours of signing up
+    public bool WelcomeOfferEnabled { get; set; }
+    public string WelcomeCode { get; set; } = "WELCOME";
+    public DiscountType WelcomeDiscountType { get; set; } = DiscountType.Percent;
+    public decimal WelcomeDiscountValue { get; set; } = 5;
+    public decimal? WelcomeMaxDiscount { get; set; } = 1500;
+    public decimal WelcomeMinOrder { get; set; }
+    public int WelcomeValidHours { get; set; } = 48;
+
     public string? InstagramUrl { get; set; }
     public string? FacebookUrl { get; set; }
     public string? YoutubeUrl { get; set; }

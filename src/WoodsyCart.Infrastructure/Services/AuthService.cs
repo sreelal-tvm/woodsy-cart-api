@@ -33,7 +33,7 @@ public record UpdateProfileRequest(string FullName, string? Phone);
 public record UserDto(int Id, string FullName, string Email, string? Phone, string Role);
 public record AuthResponse(string Token, DateTime ExpiresAt, UserDto User);
 
-public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, EmailSender mailer)
+public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, EmailSender mailer, WelcomeOfferService welcome)
 {
     private readonly PasswordHasher<AppUser> _hasher = new();
     private readonly JwtOptions _jwt = jwtOptions.Value;
@@ -62,8 +62,10 @@ public class AuthService(AppDbContext db, IOptions<JwtOptions> jwtOptions, Email
         user.IsGuest = false;
         user.PasswordHash = HashPassword(user, req.Password);
         await db.SaveChangesAsync();
+        var offer = await welcome.StartAsync(user);
         await mailer.CustomerAsync(Email.EmailEvent.AccountCreated, user.Email, "Welcome to WoodsyCart", $"Welcome, {user.FullName.Split(' ')[0]}!",
             "<p>Your WoodsyCart account is ready. You can now track your orders, save addresses and keep a wishlist.</p>" +
+            (offer is null ? "" : WelcomeOfferService.EmailBlock(offer)) +
             "<p>Factory-direct furniture, delivered and assembled free across Bengaluru.</p>", ("Start shopping", mailer.StorefrontUrl + "/shop"));
         return Issue(user);
     }

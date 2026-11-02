@@ -9,12 +9,13 @@ public record QuoteRequest(List<CartLineRequest> Items, string? CouponCode, stri
 public record QuoteLineDto(
     int ProductId, int? VariantId, string Name, string? VariantName, string Slug, string? ImageUrl,
     int Quantity, decimal UnitMrp, decimal UnitPrice, decimal LineTotal, bool IsAvailable, string? Problem,
-    decimal RegularPrice = 0, string? OfferName = null);
+    decimal RegularPrice = 0, string? OfferName = null, DateTime? OfferEndsAt = null, int? StockLeft = null);
 
 public record QuoteDto(
     List<QuoteLineDto> Lines, decimal SubTotal, decimal MrpTotal, decimal Discount, string? CouponCode, string? CouponMessage,
     decimal ShippingFee, decimal CodFee, decimal Total, decimal TaxAmount, bool CanCheckout, bool CodAvailable,
-    int DeliveryDays, List<string> Messages, decimal OfferSavings = 0);
+    int DeliveryDays, List<string> Messages, decimal OfferSavings = 0,
+    decimal FreeShippingThreshold = 0, decimal FreeShippingRemaining = 0, decimal ShippingFeeBeforeFree = 0);
 
 public record AddressDto(int Id, string Label, string FullName, string Phone, string Line1, string? Line2, string? Landmark,
     string City, string State, string Pincode, bool IsDefault, double? Latitude = null, double? Longitude = null);

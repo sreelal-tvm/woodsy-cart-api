@@ -121,6 +121,23 @@ public class CatalogController(CatalogService catalog) : ApiControllerBase
     [Authorize, HttpGet("products/{id:int}/my-review")]
     public Task<MyReviewStatusDto> MyReview(int id) => catalog.GetMyReviewStatusAsync(id, UserId);
 
+    /// <summary>This visitor's "Notify me" requests for the product (guests send the keys their browser kept, comma-separated).</summary>
+    [HttpGet("products/{id:int}/stock-alerts")]
+    public Task<List<StockAlertDto>> StockAlerts(int id, string? tokens, [FromServices] StockAlertService alerts) =>
+        alerts.MineAsync(id, OptionalUserId, (tokens ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(20).ToList());
+
+    [EnableRateLimiting(Traffic.Forms)]
+    [HttpPost("products/{id:int}/stock-alerts")]
+    public Task<StockAlertDto> AddStockAlert(int id, StockAlertRequest req, [FromServices] StockAlertService alerts) =>
+        alerts.CreateAsync(id, req, OptionalUserId);
+
+    [HttpDelete("products/{id:int}/stock-alerts")]
+    public async Task<IActionResult> CancelStockAlert(int id, int? variantId, string? token, [FromServices] StockAlertService alerts)
+    {
+        await alerts.CancelAsync(id, variantId, OptionalUserId, token);
+        return NoContent();
+    }
+
     [EnableRateLimiting(Traffic.Forms)]
     [Authorize, HttpPost("products/{id:int}/reviews")]
     public async Task<IActionResult> AddReview(int id, CreateReviewRequest req)
@@ -154,7 +171,9 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
             s.InstagramUrl, s.FacebookUrl, s.YoutubeUrl, s.DefaultDeliveryDays,
             s.MapsEnabled && !string.IsNullOrWhiteSpace(s.GoogleMapsApiKey) ? s.GoogleMapsApiKey : null,
             string.IsNullOrWhiteSpace(s.SupportHours) ? null : s.SupportHours.Trim(), await visits.IsEnabledAsync(),
-            string.IsNullOrWhiteSpace(s.ThreadsUrl) ? null : s.ThreadsUrl.Trim());
+            string.IsNullOrWhiteSpace(s.ThreadsUrl) ? null : s.ThreadsUrl.Trim(),
+            Math.Clamp(s.LowStockBadgeAt, 0, CatalogService.LowStockMax), WelcomeOfferService.Teaser(s),
+            string.IsNullOrWhiteSpace(s.PickLabel) ? "Woodsy pick" : s.PickLabel.Trim());
     }
 
     /// <summary>Visitor statistics: the storefront checks in when it opens and once a minute while it is on screen.</summary>
@@ -199,6 +218,11 @@ public class SiteController(AppDbContext db, OrderService orders, PaymentConfigS
 [Authorize, Route("api/account")]
 public class AccountController(AppDbContext db) : ApiControllerBase
 {
+    /// <summary>The customer's welcome offer while it can still be used on their first order (204 = none).</summary>
+    [HttpGet("welcome-offer")]
+    public async Task<IActionResult> WelcomeOffer([FromServices] WelcomeOfferService welcome) =>
+        await welcome.ForUserAsync(UserId) is { } w ? Ok(w) : NoContent();
+
     // ----- Addresses -----
     [HttpGet("addresses")]
     public Task<List<AddressDto>> Addresses() => db.Addresses.AsNoTracking().Where(a => a.UserId == UserId)

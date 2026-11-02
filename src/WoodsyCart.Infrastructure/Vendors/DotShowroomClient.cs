@@ -69,6 +69,9 @@ public class DsItem
     [JsonPropertyName("image_url")] public string? ImageUrl { get; set; }
     public List<DsImage>? Images { get; set; }
     public int Available { get; set; }
+    /// <summary>1 when the vendor tracks stock for this item; AvailableQuantity is then the count.</summary>
+    [JsonPropertyName("managed_inventory")] public int ManagedInventory { get; set; }
+    [JsonPropertyName("available_quantity")] public int AvailableQuantity { get; set; }
     [JsonPropertyName("is_active")] public int IsActive { get; set; }
     public string? Description { get; set; }
     [JsonPropertyName("description_detail")] public string? DescriptionDetail { get; set; }
@@ -108,6 +111,8 @@ public class DsVariant
     [JsonPropertyName("variant_name")] public string VariantName { get; set; } = "";
     public int Status { get; set; }
     public int Available { get; set; }
+    [JsonPropertyName("managed_inventory")] public int ManagedInventory { get; set; }
+    [JsonPropertyName("available_quantity")] public int AvailableQuantity { get; set; }
     public decimal Price { get; set; }
     [JsonPropertyName("discounted_price")] public decimal DiscountedPrice { get; set; }
     public List<DsImage>? Images { get; set; }

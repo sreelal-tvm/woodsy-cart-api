@@ -33,6 +33,9 @@ public class Tag : BaseEntity
     public string Name { get; set; } = "";
     public string Color { get; set; } = "#B8683A";
     public long? VendorTagId { get; set; }
+    /// <summary>The vendor's own name for the tag; Name is ours when IsRenamed (vendor sync then leaves Name alone).</summary>
+    public string? VendorName { get; set; }
+    public bool IsRenamed { get; set; }
     public ICollection<Product> Products { get; set; } = [];
 }
 
@@ -77,7 +80,15 @@ public class Product : BaseEntity
 
     public bool IsActive { get; set; } = true;       // published on storefront
     public bool IsAvailable { get; set; } = true;    // vendor stock availability
+    /// <summary>The vendor's stock count when they track it (few of their items); null = not tracked. For "Only 2 left".</summary>
+    public int? StockQuantity { get; set; }
     public bool IsFeatured { get; set; }
+    /// <summary>Admin's own label on the store ("Woodsy pick", BusinessSettings.PickLabel) — to give a slow product a push.</summary>
+    public bool IsPick { get; set; }
+    /// <summary>Separate orders in the last BusinessSettings.SellingFastDays days, kept up to date by SellingFastWorker.</summary>
+    public int RecentOrders { get; set; }
+    /// <summary>"Selling fast": RecentOrders reached BusinessSettings.SellingFastOrders (real sales only).</summary>
+    public bool IsSellingFast { get; set; }
     public bool IsDeleted { get; set; }
     public int SortOrder { get; set; }
 
@@ -90,6 +101,8 @@ public class Product : BaseEntity
     public string? VendorUrl { get; set; }
     /// <summary>When true, vendor sync only refreshes cost/availability and keeps our name/description/images.</summary>
     public bool LockContent { get; set; }
+    /// <summary>Shows the product's YouTube videos on the store (off until the video is on our own channel; Business settings can hide them all).</summary>
+    public bool ShowYouTubeVideo { get; set; }
     public DateTime? LastSyncedAt { get; set; }
     /// <summary>When the product went out in a "new arrivals" app notification (empty = not yet).</summary>
     public DateTime? PushAnnouncedAt { get; set; }
@@ -185,6 +198,8 @@ public class ProductVariant : BaseEntity
     /// <summary>Price under the product's current offer (see Product.OfferId).</summary>
     public decimal? OfferPrice { get; set; }
     public bool IsAvailable { get; set; } = true;
+    /// <summary>The vendor's stock count for this option when they track it; null = not tracked.</summary>
+    public int? StockQuantity { get; set; }
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
     public long? VendorVariantId { get; set; }
@@ -244,9 +259,25 @@ public class Offer : BaseEntity
     public OfferScope Scope { get; set; }
     /// <summary>Optional coupon code advertised with the offer (the coupon itself is set up under Coupons).</summary>
     public string? CouponCode { get; set; }
-    /// <summary>When customers got the "offer is live" app notification (once per offer).</summary>
+    /// <summary>When customers got the "offer is live" app notification (once per offer, or once per window for repeating offers).</summary>
     public DateTime? PushSentAt { get; set; }
+    /// <summary>Send the "offer is live" app notification.</summary>
+    public bool Notify { get; set; } = true;
+
+    // Flash deals: a repeating offer runs only in short windows, e.g. every Monday 8:00 pm for 15 minutes.
+    public OfferRepeat Repeat { get; set; }
+    /// <summary>Weekly / monthly-weekday: days of the week (0 = Sunday), monthly dates: days of the month (1–31), comma separated.</summary>
+    public string? RepeatDays { get; set; }
+    /// <summary>Monthly-weekday: which weeks of the month (1–4, 5 = last), comma separated.</summary>
+    public string? RepeatWeeks { get; set; }
+    /// <summary>Repeating offers: start time of each window, India time.</summary>
+    public TimeSpan? WindowStart { get; set; }
+    public int WindowMinutes { get; set; }
+    /// <summary>How the offer price is rounded (always down, so customers get at least the advertised discount).</summary>
+    public PriceRounding Rounding { get; set; } = PriceRounding.None;
 
     public ICollection<Category> Categories { get; set; } = [];
     public ICollection<Product> Products { get; set; } = [];
+    /// <summary>Products left out of an all-products or category offer.</summary>
+    public ICollection<Product> ExcludedProducts { get; set; } = [];
 }
